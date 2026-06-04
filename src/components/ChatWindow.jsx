@@ -1,136 +1,143 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
-function ChatWindow() {
-  // 1. 대화 내역들을 담아두는 배열 상자 (처음에는 AI의 웰컴 메시지가 들어있습니다)
+const QUICK_ACTIONS = [
+  { label: '비 오면?', scenario: 'rain', prompt: '비가 오면 일정이 어떻게 바뀌어?' },
+  { label: '예산 줄이기', scenario: 'budget', prompt: '예산을 아끼는 일정으로 다시 짜줘.' },
+  { label: '기본 추천', scenario: 'balanced', prompt: '처음 조건에 맞는 균형 잡힌 일정으로 보여줘.' },
+];
+
+function ChatWindow({ activePlan, plans, onScenarioChange, scenarioKey }) {
   const [messages, setMessages] = useState([
-    { id: 1, sender: 'ai', text: '안녕하세요! 제주도 여행 계획을 도와드릴 AI 플래너입니다. "제주 2박 3일" 또는 "감성 카페 추천" 등 편하게 말씀해주세요!' }
+    {
+      id: 1,
+      sender: 'ai',
+      text: '안녕하세요. 저는 여행 중 날씨, 예산, 이동 피로도를 보고 일정을 다시 짜주는 AI 여행 매니저입니다. 아래 버튼으로 상황을 바꿔보세요.',
+    },
   ]);
-
-  // 2. 사용자가 입력창에 치고 있는 텍스트를 기억하는 상자
   const [inputText, setInputText] = useState('');
-  
-  // 3. AI가 지금 한 글자씩 대답을 "생성 중(스트리밍 중)"인지 체크하는 상태
   const [isTyping, setIsTyping] = useState(false);
-
-  // 채팅방 스크롤을 맨 아래로 내리기 위한 장치
   const chatEndRef = useRef(null);
+
+  const activeAction = useMemo(
+    () => QUICK_ACTIONS.find((action) => action.scenario === scenarioKey),
+    [scenarioKey],
+  );
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // [핵심 함수] 사용자가 메시지를 전송했을 때 실행되는 함수
-  const handleSend = (e) => {
-    e.preventDefault(); // 페이지 새로고침 방지
-    if (!inputText.trim() || isTyping) return; // 빈 칸이거나 AI가 말하는 중이면 패스
+  const addConversation = (prompt, scenario = scenarioKey) => {
+    if (isTyping) return;
 
-    // A. 사용자가 쓴 글을 채팅방 대화 내역에 추가하기
-    const userMessage = { id: Date.now(), sender: 'user', text: inputText };
+    const userMessage = { id: Date.now(), sender: 'user', text: prompt };
     setMessages((prev) => [...prev, userMessage]);
-    setInputText(''); // 입력창 비우기
-
-    // B. AI의 실시간 가짜 SSE 스트리밍 답변 시작하기
-    setIsTyping(true);
-    simulateAIResponse(inputText);
+    setInputText('');
+    onScenarioChange(scenario);
+    streamAIResponse(prompt, scenario);
   };
 
-  // [가짜 SSE 함수] AI 대답이 한 글자씩 추가되는 마법의 함수
-  const simulateAIResponse = (userQuery) => {
-    const fullAnswer = `🤖 [플로우 B: RAG 기반 추천] "${userQuery}"에 대한 추천 장소입니다.\n\n맑은 날(Plan A)이라면 바다가 보이는 '용두암 카페거리'를, 우천 시(Plan B)라면 실내 복합 문화공간인 '아라리오뮤지엄'을 추천합니다! 지도의 버튼을 눌러 동선을 확인해보세요.`;
-    
-    // 먼저 채팅방에 비어있는 AI 메시지 칸을 하나 만듭니다.
+  const handleSend = (event) => {
+    event.preventDefault();
+    if (!inputText.trim() || isTyping) return;
+
+    const normalized = inputText.trim();
+    const detectedScenario = detectScenario(normalized, scenarioKey);
+    addConversation(normalized, detectedScenario);
+  };
+
+  const streamAIResponse = (prompt, scenario) => {
+    setIsTyping(true);
+    const answer = createAnswer(prompt, scenario, plans[scenario] ?? activePlan);
     const aiMessageId = Date.now() + 1;
+
     setMessages((prev) => [...prev, { id: aiMessageId, sender: 'ai', text: '' }]);
 
-    let currentText = '';
     let index = 0;
-
-    // 타이머를 돌리면서 한 글자씩 글자를 이어 붙입니다 (SSE 스트리밍 흉내내기)
+    let currentText = '';
     const interval = setInterval(() => {
-      if (index < fullAnswer.length) {
-        currentText += fullAnswer[index];
-        
-        // 특정 ID를 가진 AI 메시지의 텍스트만 실시간으로 업데이트해줍니다.
+      if (index < answer.length) {
+        currentText += answer[index];
         setMessages((prev) =>
-          prev.map((msg) => (msg.id === aiMessageId ? { ...msg, text: currentText } : msg))
+          prev.map((message) =>
+            message.id === aiMessageId ? { ...message, text: currentText } : message,
+          ),
         );
-        index++;
+        index += 1;
       } else {
-        clearInterval(interval); // 글자가 다 나오면 타이머 종료
-        setIsTyping(false); // AI 말하기 끝
+        clearInterval(interval);
+        setIsTyping(false);
       }
-    }, 30); // 30ms마다 한 글자씩 출력 (속도 조절 가능)
+    }, 16);
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '550px', backgroundColor: '#f9f9f9', borderRadius: '16px', overflow: 'hidden', border: '1px solid #eee' }}>
-      
-      {/* 채팅창 헤더 */}
-      <div style={{ padding: '15px 20px', backgroundColor: '#4A90E2', color: '#fff', fontWeight: 'bold' }}>
-        🤖 Agentic AI 플래너
+    <section className="chat-panel">
+      <div className="panel-header">
+        <div>
+          <span>AI 플래너</span>
+          <h2>상황 대응 채팅</h2>
+        </div>
+        <strong>{activeAction?.label}</strong>
       </div>
 
-      {/* 대화 내역이 보여지는 구역 */}
-      <div style={{ flex: 1, padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            style={{
-              alignSelf: msg.sender === 'user' ? 'flex-end' : 'flex-start',
-              maxWidth: '75%',
-              padding: '12px 16px',
-              borderRadius: msg.sender === 'user' ? '16px 16px 0 16px' : '16px 16px 16px 0',
-              backgroundColor: msg.sender === 'user' ? '#4A90E2' : '#fff',
-              color: msg.sender === 'user' ? '#fff' : '#333',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
-              whiteSpace: 'pre-line', // 줄바꿈(\n)이 화면에 먹히도록 설정
-              fontSize: '14px',
-              lineHeight: '1.5'
-            }}
+      <div className="quick-actions" aria-label="빠른 상황 변경">
+        {QUICK_ACTIONS.map((action) => (
+          <button
+            key={action.scenario}
+            className={scenarioKey === action.scenario ? 'selected' : ''}
+            onClick={() => addConversation(action.prompt, action.scenario)}
+            type="button"
+            disabled={isTyping}
           >
-            {msg.text}
+            {action.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="message-list">
+        {messages.map((message) => (
+          <div className={`message ${message.sender}`} key={message.id}>
+            {message.text}
           </div>
         ))}
-        {/* 스크롤 하단 자동 고정용 타겟 */}
         <div ref={chatEndRef} />
       </div>
 
-      {/* 메시지 입력창 폼 */}
-      <form onSubmit={handleSend} style={{ display: 'flex', padding: '15px', backgroundColor: '#fff', borderTop: '1px solid #eee' }}>
+      <form className="chat-form" onSubmit={handleSend}>
         <input
           type="text"
           value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-          placeholder={isTyping ? "AI가 답변을 생성 중입니다..." : "메시지를 입력하세요 (예: 감성 카페 추천)"}
+          onChange={(event) => setInputText(event.target.value)}
+          placeholder={isTyping ? 'AI가 일정을 다시 계산하고 있어요...' : '예: 비 오면 실내 코스로 바꿔줘'}
           disabled={isTyping}
-          style={{
-            flex: 1,
-            padding: '12px',
-            border: '1px solid #ddd',
-            borderRadius: '8px',
-            outline: 'none',
-            fontSize: '14px'
-          }}
         />
-        <button
-          type="submit"
-          disabled={isTyping || !inputText.trim()}
-          style={{
-            marginLeft: '10px',
-            padding: '0 20px',
-            backgroundColor: isTyping || !inputText.trim() ? '#ccc' : '#4A90E2',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '8px',
-            cursor: isTyping || !inputText.trim() ? 'default' : 'pointer',
-            fontWeight: 'bold'
-          }}
-        >
+        <button type="submit" disabled={isTyping || !inputText.trim()}>
           전송
         </button>
       </form>
-
-    </div>
+    </section>
   );
+}
+
+function detectScenario(text, fallback) {
+  if (/비|우천|실내|날씨/.test(text)) return 'rain';
+  if (/예산|절약|돈|비용|저렴/.test(text)) return 'budget';
+  if (/기본|균형|처음|추천/.test(text)) return 'balanced';
+  return fallback;
+}
+
+function createAnswer(prompt, scenario, activePlan) {
+  const planName = {
+    balanced: '기본 추천 일정',
+    rain: '비 오는 날 대체 일정',
+    budget: '예산 절약 일정',
+  }[scenario];
+
+  const firstStop = activePlan.places[1]?.title ?? activePlan.places[0].title;
+  const lastStop = activePlan.places[activePlan.places.length - 1].title;
+
+  return `[${planName}] 요청: "${prompt}"\n\n${activePlan.summary}\n\n핵심 변경점은 ${firstStop}부터 ${lastStop}까지 이동 부담을 줄인 것입니다. 지도와 일정표도 같은 기준으로 업데이트했어요.\n\n추천 근거\n- ${activePlan.reasons.join('\n- ')}`;
 }
 
 export default ChatWindow;
