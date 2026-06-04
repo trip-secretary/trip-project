@@ -69,8 +69,61 @@
   backdrop-filter: blur(12px);
 }
 
+.settings-card {
+  display: grid;
+  gap: 12px;
+}
+
 .trip-card-title {
   color: #2563eb;
+}
+
+.setting-field {
+  display: grid;
+  gap: 7px;
+  text-align: left;
+}
+
+.setting-field span {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.setting-field input,
+.setting-field select {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #d9e1ed;
+  border-radius: 8px;
+  background: #fff;
+  color: #172033;
+  padding: 9px 10px;
+  outline: none;
+}
+
+.setting-field input:focus,
+.setting-field select:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.setting-field input[type='range'] {
+  min-height: auto;
+  padding: 0;
+  accent-color: #2563eb;
+}
+
+.setting-field strong {
+  color: #172033;
+  font-size: 14px;
+  text-align: right;
+}
+
+.setting-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
 }
 
 .trip-row {
@@ -535,6 +588,7 @@
   }
 
   .trip-row,
+  .setting-pair,
   .timeline li,
   .expense-row {
     grid-template-columns: 1fr;

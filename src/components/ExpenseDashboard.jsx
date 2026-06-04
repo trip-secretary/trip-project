@@ -13,21 +13,21 @@ const RECEIPT_SAMPLES = [
   { category: '교통', store: '주차 및 주유', amount: 22000 },
 ];
 
-function ExpenseDashboard({ scenarioKey }) {
-  const budget = scenarioKey === 'budget' ? 240000 : 300000;
+function ExpenseDashboard({ scenarioKey, tripSettings }) {
+  const scenarioBudget = scenarioKey === 'budget' ? Math.floor(tripSettings.budget * 0.8) : tripSettings.budget;
   const [expenses, setExpenses] = useState(BASE_EXPENSES);
   const [isProcessing, setIsProcessing] = useState(false);
   const [analysisLog, setAnalysisLog] = useState('영수증이나 교통비 이미지를 올리면 카테고리를 자동 분류합니다.');
 
   const totalSpent = expenses.reduce((sum, item) => sum + item.amount, 0);
-  const totalPercent = Math.min((totalSpent / budget) * 100, 100);
-  const remain = budget - totalSpent;
+  const totalPercent = Math.min((totalSpent / scenarioBudget) * 100, 100);
+  const remain = scenarioBudget - totalSpent;
 
   const riskMessage = useMemo(() => {
     if (remain < 0) return '예산을 초과했습니다. AI가 무료 코스와 시장 중심 일정으로 재계획할 수 있어요.';
-    if (remain < budget * 0.15) return '남은 예산이 적습니다. 다음 식사나 이동 수단을 조정하는 것이 좋습니다.';
-    return '현재 예산 흐름은 안정적입니다.';
-  }, [budget, remain]);
+    if (remain < scenarioBudget * 0.15) return '남은 예산이 적습니다. 다음 식사나 이동 수단을 조정하는 것이 좋습니다.';
+    return `${tripSettings.travelers}명 기준 현재 예산 흐름은 안정적입니다.`;
+  }, [scenarioBudget, remain, tripSettings.travelers]);
 
   const handleReceiptUpload = (event) => {
     const file = event.target.files?.[0];
@@ -57,7 +57,10 @@ function ExpenseDashboard({ scenarioKey }) {
       <div className="section-heading">
         <span>예산 관리</span>
         <h2>영수증 기반 자동 정산</h2>
-        <p>수동 입력 대신 OCR과 LLM 분류 흐름을 데모로 보여주고, 예산 위험도를 즉시 알려줍니다.</p>
+        <p>
+          설정한 1일 예산 {tripSettings.budget.toLocaleString()}원을 기준으로 지출 위험도를 계산합니다.
+          예산 절약 모드에서는 목표 예산을 20% 낮춰 보여줍니다.
+        </p>
       </div>
 
       <div className="expense-grid">
@@ -74,14 +77,11 @@ function ExpenseDashboard({ scenarioKey }) {
           <div className="budget-header">
             <span>총 지출</span>
             <strong>
-              {totalSpent.toLocaleString()}원 / {budget.toLocaleString()}원
+              {totalSpent.toLocaleString()}원 / {scenarioBudget.toLocaleString()}원
             </strong>
           </div>
           <div className="progress-track">
-            <div
-              className={remain < 0 ? 'danger' : ''}
-              style={{ width: `${totalPercent}%` }}
-            />
+            <div className={remain < 0 ? 'danger' : ''} style={{ width: `${totalPercent}%` }} />
           </div>
           <p className={remain < 0 ? 'risk danger' : 'risk'}>{riskMessage}</p>
 

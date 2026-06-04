@@ -3,15 +3,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 const QUICK_ACTIONS = [
   { label: '비 오면?', scenario: 'rain', prompt: '비가 오면 일정이 어떻게 바뀌어?' },
   { label: '예산 줄이기', scenario: 'budget', prompt: '예산을 아끼는 일정으로 다시 짜줘.' },
-  { label: '기본 추천', scenario: 'balanced', prompt: '처음 조건에 맞는 균형 잡힌 일정으로 보여줘.' },
+  { label: '기본 추천', scenario: 'balanced', prompt: '현재 조건에 맞는 균형 잡힌 일정으로 보여줘.' },
 ];
 
-function ChatWindow({ activePlan, plans, onScenarioChange, scenarioKey }) {
+function ChatWindow({ activePlan, plans, tripSettings, onScenarioChange, scenarioKey }) {
   const [messages, setMessages] = useState([
     {
       id: 1,
       sender: 'ai',
-      text: '안녕하세요. 저는 여행 중 날씨, 예산, 이동 피로도를 보고 일정을 다시 짜주는 AI 여행 매니저입니다. 아래 버튼으로 상황을 바꿔보세요.',
+      text: '안녕하세요. 여행 조건을 바꾸면 제가 예산, 이동수단, 취향을 반영해서 일정을 다시 계산해드릴게요.',
     },
   ]);
   const [inputText, setInputText] = useState('');
@@ -48,7 +48,7 @@ function ChatWindow({ activePlan, plans, onScenarioChange, scenarioKey }) {
 
   const streamAIResponse = (prompt, scenario) => {
     setIsTyping(true);
-    const answer = createAnswer(prompt, scenario, plans[scenario] ?? activePlan);
+    const answer = createAnswer(prompt, scenario, plans[scenario] ?? activePlan, tripSettings);
     const aiMessageId = Date.now() + 1;
 
     setMessages((prev) => [...prev, { id: aiMessageId, sender: 'ai', text: '' }]);
@@ -127,7 +127,7 @@ function detectScenario(text, fallback) {
   return fallback;
 }
 
-function createAnswer(prompt, scenario, activePlan) {
+function createAnswer(prompt, scenario, activePlan, settings) {
   const planName = {
     balanced: '기본 추천 일정',
     rain: '비 오는 날 대체 일정',
@@ -137,7 +137,21 @@ function createAnswer(prompt, scenario, activePlan) {
   const firstStop = activePlan.places[1]?.title ?? activePlan.places[0].title;
   const lastStop = activePlan.places[activePlan.places.length - 1].title;
 
-  return `[${planName}] 요청: "${prompt}"\n\n${activePlan.summary}\n\n핵심 변경점은 ${firstStop}부터 ${lastStop}까지 이동 부담을 줄인 것입니다. 지도와 일정표도 같은 기준으로 업데이트했어요.\n\n추천 근거\n- ${activePlan.reasons.join('\n- ')}`;
+  return `[${planName}] 요청: "${prompt}"
+
+현재 조건
+- 여행지: ${settings.destination}
+- 기간/인원: ${settings.dates}, ${settings.travelers}명
+- 예산: ${settings.budget.toLocaleString()}원
+- 이동수단: ${settings.transport}
+- 취향: ${settings.preference}
+
+${activePlan.summary}
+
+핵심 변경점은 ${firstStop}부터 ${lastStop}까지의 동선을 ${settings.pace} 흐름에 맞춘 것입니다.
+
+추천 근거
+- ${activePlan.reasons.join('\n- ')}`;
 }
 
 export default ChatWindow;
