@@ -64,7 +64,7 @@ export function Home() {
                   <input
                     type="text"
                     required
-                    placeholder="예: 오사카, 파리, 제주도"
+                    placeholder="예: 서울, 부산, 천안"
                     value={destination}
                     onChange={(e) => setDestination(e.target.value)}
                     className="block w-full pl-10 pr-3 py-3 border border-slate-300 rounded-xl leading-5 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition-all"
