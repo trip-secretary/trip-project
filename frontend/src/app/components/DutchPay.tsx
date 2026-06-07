@@ -31,7 +31,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
 
 async function parseReceiptImage(dataUrl: string): Promise<ReceiptItem[]> {
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!apiKey || apiKey === "여기에_발급받은_키_입력") {
+  if (!apiKey) {
     throw new Error("GEMINI_API_KEY_MISSING");
   }
 
