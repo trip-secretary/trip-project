@@ -49,7 +49,7 @@ export function Home() {
           <h1 className="text-4xl md:text-5xl font-extrabold text-white mb-6 tracking-tight drop-shadow-md">
             하나의 여행지, <span className="text-indigo-300">두 개의 다른 이야기</span>
           </h1>
-          <p className="text-lg md:text-xl text-slate-100 mb-10 max-w-2xl mx-auto drop-shadow">
+          <p className="text-lg md:text-xl text-slate-100 mb-10 max-w-2xl mx-auto drop-shadow" style={{ wordBreak: "keep-all" }}>
             어디로, 언제 떠나시나요? 당신의 취향에 맞춘 완전히 다른 두 가지의 맞춤형 여행 경로를 추천해 드립니다.
           </p>
 

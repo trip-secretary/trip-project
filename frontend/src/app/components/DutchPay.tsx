@@ -1,473 +1,515 @@
-import { useState, useRef } from "react";
-import { Camera, Plus, Minus, X, ChevronUp, Check, Loader2, AlertCircle } from "lucide-react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { useState, useEffect, useRef } from "react";
+import { Receipt, Plus, Trash2, ChevronRight, ArrowRight, Users, Calculator, X, Camera, Loader2 } from "lucide-react";
 
-interface ReceiptItem {
-  id: string;
-  name: string;
-  price: number;
-  checked: boolean;
-}
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api";
 
-interface Person {
-  id: string;
-  name: string;
-}
-
-const DEFAULT_PERSONS: Person[] = [
-  { id: "1", name: "증김동" },
-  { id: "2", name: "김철수" },
-  { id: "3", name: "이영희" },
-];
-
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => resolve(e.target?.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+async function ocrReceipt(imageBase64: string): Promise<{ store_name: string | null; total_amount: number | null; items: { name: string; price: number }[] }> {
+  const res = await fetch(`${BASE_URL}/dutch-pay/ocr`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image_base64: imageBase64 }),
   });
+  if (!res.ok) throw new Error("OCR 실패");
+  return res.json();
 }
 
-async function parseReceiptImage(dataUrl: string): Promise<ReceiptItem[]> {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY_MISSING");
+interface Expense {
+  id: string;
+  description: string;
+  category: string;
+  amount: number;
+  paidBy: string;
+  participants: string[];
+}
+
+interface Group {
+  id: string;
+  name: string;
+  members: string[];
+  expenses: Expense[];
+  createdAt: string;
+}
+
+interface Settlement {
+  from: string;
+  to: string;
+  amount: number;
+}
+
+const CATEGORIES = ["식비", "숙박", "교통", "입장료", "쇼핑", "기타"];
+
+function calcSettlements(members: string[], expenses: Expense[]): { balances: Record<string, number>; settlements: Settlement[] } {
+  const paid: Record<string, number> = Object.fromEntries(members.map((m) => [m, 0]));
+  const shouldPay: Record<string, number> = Object.fromEntries(members.map((m) => [m, 0]));
+
+  for (const exp of expenses) {
+    const per = Math.floor(exp.amount / exp.participants.length);
+    paid[exp.paidBy] = (paid[exp.paidBy] ?? 0) + exp.amount;
+    for (const p of exp.participants) {
+      shouldPay[p] = (shouldPay[p] ?? 0) + per;
+    }
   }
 
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  const balances: Record<string, number> = {};
+  for (const m of members) balances[m] = (paid[m] ?? 0) - (shouldPay[m] ?? 0);
 
-  const [header, base64Data] = dataUrl.split(",");
-  const mimeType = (header.match(/data:([^;]+)/) ?? [])[1] ?? "image/jpeg";
+  const creditors = members.filter((m) => balances[m] > 0).map((m) => ({ name: m, amt: balances[m] })).sort((a, b) => b.amt - a.amt);
+  const debtors = members.filter((m) => balances[m] < 0).map((m) => ({ name: m, amt: -balances[m] })).sort((a, b) => b.amt - a.amt);
 
-  const result = await model.generateContent([
-    { inlineData: { data: base64Data, mimeType } },
-    `이 영수증 이미지에서 개별 항목명과 금액을 추출해주세요.
-JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요:
-{"items": [{"name": "항목명", "price": 숫자}]}
-규칙:
-- 총계/합계/소계/부가세/봉사료 항목은 제외
-- 가격은 원화 숫자만 (쉼표, 원 기호 제외)
-- 항목이 없으면 {"items": []} 반환`,
-  ]);
+  const settlements: Settlement[] = [];
+  let i = 0, j = 0;
+  while (i < creditors.length && j < debtors.length) {
+    const transfer = Math.min(creditors[i].amt, debtors[j].amt);
+    if (transfer > 0) settlements.push({ from: debtors[j].name, to: creditors[i].name, amount: transfer });
+    creditors[i].amt -= transfer;
+    debtors[j].amt -= transfer;
+    if (creditors[i].amt === 0) i++;
+    if (debtors[j].amt === 0) j++;
+  }
 
-  const text = result.response.text().trim();
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("파싱 실패");
+  return { balances, settlements };
+}
 
-  const parsed: { items: { name: string; price: number }[] } = JSON.parse(jsonMatch[0]);
-  return parsed.items.map((item, i) => ({
-    id: `${Date.now()}-${i}`,
-    name: item.name,
-    price: Number(item.price),
-    checked: true,
-  }));
+const STORAGE_KEY = "dutch_pay_groups";
+
+function loadGroups(): Group[] {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveGroups(groups: Group[]) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(groups));
 }
 
 export function DutchPay() {
-  const [items, setItems] = useState<ReceiptItem[]>([]);
-  const [persons, setPersons] = useState<Person[]>(DEFAULT_PERSONS);
-  const [splitMode, setSplitMode] = useState<"equal" | "item">("item");
-  const [uploadedImages, setUploadedImages] = useState<string[]>([]);
-  const [isDragging, setIsDragging] = useState(false);
-  const [addingPerson, setAddingPerson] = useState(false);
-  const [newPersonName, setNewPersonName] = useState("");
-  const [newItemName, setNewItemName] = useState("");
-  const [newItemPrice, setNewItemPrice] = useState("");
+  const [groups, setGroups] = useState<Group[]>(() => loadGroups());
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [showAddExpense, setShowAddExpense] = useState(false);
+
+  // Create group form
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newMemberInput, setNewMemberInput] = useState("");
+  const [newMembers, setNewMembers] = useState<string[]>([]);
+
+  // Add expense form
+  const [expDesc, setExpDesc] = useState("");
+  const [expCategory, setExpCategory] = useState("식비");
+  const [expAmount, setExpAmount] = useState("");
+  const [expPaidBy, setExpPaidBy] = useState("");
+  const [expParticipants, setExpParticipants] = useState<string[]>([]);
   const [ocrLoading, setOcrLoading] = useState(false);
-  const [ocrError, setOcrError] = useState<string | null>(null);
+  const [ocrItems, setOcrItems] = useState<{ name: string; price: number }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const totalAmount = items.reduce((sum, i) => sum + i.price, 0);
-  const selectedAmount = items.filter((i) => i.checked).reduce((sum, i) => sum + i.price, 0);
-  const perPersonEqual = persons.length > 0 ? Math.ceil(totalAmount / persons.length) : 0;
-  const perPersonItem = persons.length > 0 ? Math.ceil(selectedAmount / persons.length) : 0;
+  useEffect(() => { saveGroups(groups); }, [groups]);
 
-  const handleFiles = async (files: FileList | File[]) => {
-    const validFiles = Array.from(files).filter((f) => f.type.match(/image\/(jpeg|png)/));
-    if (!validFiles.length) return;
+  const selectedGroup = groups.find((g) => g.id === selectedId) ?? null;
 
+  // ── Create Group ──
+  const handleCreateGroup = () => {
+    if (!newGroupName.trim() || newMembers.length < 2) return;
+    const g: Group = { id: Date.now().toString(), name: newGroupName.trim(), members: newMembers, expenses: [], createdAt: new Date().toLocaleDateString("ko-KR") };
+    setGroups((prev) => [g, ...prev]);
+    setSelectedId(g.id);
+    setShowCreate(false);
+    setNewGroupName("");
+    setNewMembers([]);
+  };
+
+  const addMember = () => {
+    const name = newMemberInput.trim();
+    if (name && !newMembers.includes(name)) setNewMembers((prev) => [...prev, name]);
+    setNewMemberInput("");
+  };
+
+  // ── Add Expense ──
+  const openAddExpense = () => {
+    if (!selectedGroup) return;
+    setExpDesc("");
+    setExpCategory("식비");
+    setExpAmount("");
+    setExpPaidBy(selectedGroup.members[0] ?? "");
+    setExpParticipants([...selectedGroup.members]);
+    setOcrItems([]);
+    setShowAddExpense(true);
+  };
+
+  const handleOcrUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     setOcrLoading(true);
-    setOcrError(null);
-
-    for (const file of validFiles) {
-      try {
-        const dataUrl = await readFileAsDataUrl(file);
-        setUploadedImages((prev) => [...prev, dataUrl]);
-        const newItems = await parseReceiptImage(dataUrl);
-        setItems((prev) => [...prev, ...newItems]);
-      } catch (e: unknown) {
-        if (e instanceof Error && e.message === "GEMINI_API_KEY_MISSING") {
-          setOcrError("Gemini API 키가 설정되지 않았습니다. .env 파일에 VITE_GEMINI_API_KEY를 입력해주세요.");
-        } else {
-          setOcrError("영수증 인식에 실패했습니다. 항목을 직접 입력해주세요.");
-        }
-      }
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const result = await ocrReceipt(base64);
+      if (result.store_name) setExpDesc(result.store_name);
+      if (result.total_amount) setExpAmount(String(result.total_amount));
+      if (result.items?.length) setOcrItems(result.items);
+    } catch {
+      alert("영수증 인식에 실패했습니다. 다시 시도해주세요.");
+    } finally {
+      setOcrLoading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
-
-    setOcrLoading(false);
   };
 
-  const toggleItem = (id: string) =>
-    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, checked: !i.checked } : i)));
-
-  const addItem = () => {
-    const price = parseInt(newItemPrice);
-    if (!newItemName.trim() || isNaN(price) || price <= 0) return;
-    setItems((prev) => [
-      ...prev,
-      { id: Date.now().toString(), name: newItemName.trim(), price, checked: true },
-    ]);
-    setNewItemName("");
-    setNewItemPrice("");
+  const handleAddExpense = () => {
+    const amount = parseInt(expAmount.replace(/,/g, ""));
+    if (!expDesc.trim() || isNaN(amount) || amount <= 0 || !expPaidBy || expParticipants.length === 0) return;
+    const expense: Expense = { id: Date.now().toString(), description: expDesc.trim(), category: expCategory, amount, paidBy: expPaidBy, participants: expParticipants };
+    setGroups((prev) => prev.map((g) => g.id === selectedId ? { ...g, expenses: [...g.expenses, expense] } : g));
+    setShowAddExpense(false);
   };
 
-  const removePerson = (id: string) => setPersons((prev) => prev.filter((p) => p.id !== id));
-
-  const addPerson = () => {
-    if (!newPersonName.trim()) return;
-    setPersons((prev) => [...prev, { id: Date.now().toString(), name: newPersonName.trim() }]);
-    setNewPersonName("");
-    setAddingPerson(false);
+  const deleteExpense = (expId: string) => {
+    setGroups((prev) => prev.map((g) => g.id === selectedId ? { ...g, expenses: g.expenses.filter((e) => e.id !== expId) } : g));
   };
 
-  const handleReset = () => {
-    setItems([]);
-    setPersons(DEFAULT_PERSONS);
-    setSplitMode("item");
-    setUploadedImages([]);
-    setOcrError(null);
+  const deleteGroup = (gid: string) => {
+    if (!confirm("이 정산 그룹을 삭제할까요?")) return;
+    setGroups((prev) => prev.filter((g) => g.id !== gid));
+    if (selectedId === gid) setSelectedId(null);
   };
 
-  const amountPerPerson = splitMode === "equal" ? perPersonEqual : perPersonItem;
-  const hasUploaded = uploadedImages.length > 0;
+  // ── GROUP DETAIL VIEW ──
+  if (selectedGroup) {
+    const { balances, settlements } = calcSettlements(selectedGroup.members, selectedGroup.expenses);
+    const totalAmount = selectedGroup.expenses.reduce((s, e) => s + e.amount, 0);
 
-  return (
-    <div className="max-w-5xl mx-auto w-full px-4 py-8">
-      <h1 className="text-2xl font-bold text-slate-900 mb-6">더치페이 계산</h1>
+    return (
+      <div className="flex-1 flex flex-col max-w-3xl mx-auto w-full px-4 py-8">
+        <button onClick={() => setSelectedId(null)} className="flex items-center gap-1.5 text-slate-500 hover:text-slate-800 text-sm mb-6 transition-colors">
+          ← 목록으로
+        </button>
 
-      {/* 영수증 업로드 + 미리보기 */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-6">
-        <div className="flex gap-6">
-          {/* 업로드 영역 */}
-          <div
-            className={`border-2 border-dashed rounded-xl flex flex-col items-center justify-center py-10 cursor-pointer transition-colors min-h-[200px] ${
-              hasUploaded ? "w-52 shrink-0" : "flex-1"
-            } ${isDragging ? "border-indigo-400 bg-indigo-50" : "border-slate-300 bg-slate-50"}`}
-            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={(e) => { e.preventDefault(); setIsDragging(false); if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files); }}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".jpg,.jpeg,.png"
-              multiple
-              className="hidden"
-              onChange={(e) => { if (e.target.files?.length) handleFiles(e.target.files); e.target.value = ""; }}
-            />
-            {hasUploaded ? (
-              <>
-                <div className="flex flex-wrap gap-2 justify-center px-3 mb-3">
-                  {uploadedImages.map((src, i) => (
-                    <div key={i} className="relative group">
-                      <img src={src} alt={`영수증 ${i + 1}`} className="w-16 h-20 object-cover rounded-lg border border-slate-200" />
-                      <button
-                        className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={(e) => { e.stopPropagation(); setUploadedImages((prev) => prev.filter((_, idx) => idx !== i)); }}
-                      >
-                        <X className="w-2.5 h-2.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <button
-                  className="flex items-center gap-1.5 border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-600 hover:bg-white transition-colors"
-                  onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
-                >
-                  <Plus className="w-3 h-3" />
-                  추가 업로드
-                </button>
-              </>
-            ) : (
-              <>
-                <div className="w-14 h-14 rounded-full bg-slate-200 flex items-center justify-center mb-3">
-                  <Camera className="w-7 h-7 text-slate-400" />
-                </div>
-                <p className="font-semibold text-slate-700 mb-1">영수증 사진 업로드</p>
-                <p className="text-sm text-indigo-500 mb-4">클릭 또는 드래그</p>
-                <button
-                  className="flex items-center gap-1.5 border border-slate-300 rounded-lg px-4 py-2 text-sm text-slate-600 hover:bg-white transition-colors"
-                  onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  다시 업로드
-                </button>
-                <p className="text-xs text-slate-400 mt-3">.jpg, .png (최대 10MB) 포맷입니다.</p>
-              </>
-            )}
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">{selectedGroup.name}</h1>
+            <p className="text-slate-500 text-sm mt-0.5">{selectedGroup.members.join(", ")} · {selectedGroup.createdAt}</p>
           </div>
+          <button onClick={openAddExpense} className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-indigo-700 transition-colors shadow-sm">
+            <Plus className="w-4 h-4" />
+            지출 추가
+          </button>
+        </div>
 
-          {/* 영수증 미리보기: 업로드한 개수만큼 */}
-          {hasUploaded && (
-            <div className="flex gap-3 flex-wrap flex-1">
-              {uploadedImages.map((_, idx) => (
-                <div
-                  key={idx}
-                  className={`border rounded-xl p-4 w-40 shrink-0 ${idx > 0 ? "shadow-md" : ""} border-slate-200`}
-                >
-                  <p className="text-center font-semibold text-slate-800 text-sm mb-2 pb-2 border-b border-slate-100">
-                    영수증
-                  </p>
-                  {ocrLoading ? (
-                    <div className="flex flex-col items-center justify-center py-4 gap-2">
-                      <Loader2 className="w-5 h-5 text-indigo-400 animate-spin" />
-                      <p className="text-xs text-slate-400">인식 중...</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {items.length === 0 ? (
-                        <p className="text-xs text-slate-400 text-center py-2">항목 없음</p>
-                      ) : (
-                        items.map((item) => (
-                          <div key={item.id} className="flex justify-between text-xs text-slate-700">
-                            <span>{item.name}</span>
-                            <span>{item.price.toLocaleString()}</span>
-                          </div>
-                        ))
-                      )}
-                      {items.length > 0 && (
-                        <div className="flex justify-between text-xs font-bold border-t border-slate-100 pt-2 mt-1">
-                          <span>총계</span>
-                          <span>{totalAmount.toLocaleString()}원</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
+        {/* 지출 목록 */}
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+            <h2 className="font-bold text-slate-800">지출 내역</h2>
+            <span className="text-sm text-slate-500">총 {totalAmount.toLocaleString()}원</span>
+          </div>
+          {selectedGroup.expenses.length === 0 ? (
+            <div className="py-12 text-center text-slate-400">
+              <Receipt className="w-8 h-8 mx-auto mb-2 opacity-40" />
+              <p className="text-sm">지출 내역이 없습니다</p>
             </div>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {selectedGroup.expenses.map((exp) => (
+                <li key={exp.id} className="flex items-center gap-3 px-5 py-3.5">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full">{exp.category}</span>
+                      <span className="font-medium text-slate-800 truncate">{exp.description}</span>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-0.5">{exp.paidBy} 결제 · {exp.participants.join(", ")} 참여 · 1인 {Math.floor(exp.amount / exp.participants.length).toLocaleString()}원</p>
+                  </div>
+                  <span className="font-bold text-slate-900 shrink-0">{exp.amount.toLocaleString()}원</span>
+                  <button onClick={() => deleteExpense(exp.id)} className="p-1.5 rounded-lg text-slate-300 hover:text-red-400 hover:bg-red-50 transition-colors">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
 
-        {/* OCR 에러 메시지 */}
-        {ocrError && (
-          <div className="mt-4 flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-            <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
-            <p className="text-xs text-red-600">{ocrError}</p>
+        {/* 멤버별 잔액 */}
+        {selectedGroup.expenses.length > 0 && (
+          <>
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4">
+              <div className="px-5 py-4 border-b border-slate-100">
+                <h2 className="font-bold text-slate-800">멤버별 현황</h2>
+              </div>
+              <ul className="divide-y divide-slate-100">
+                {selectedGroup.members.map((m) => {
+                  const bal = balances[m] ?? 0;
+                  return (
+                    <li key={m} className="flex items-center justify-between px-5 py-3.5">
+                      <span className="font-medium text-slate-800">{m}</span>
+                      <span className={`font-bold ${bal > 0 ? "text-emerald-600" : bal < 0 ? "text-red-500" : "text-slate-400"}`}>
+                        {bal > 0 ? `+${bal.toLocaleString()}원 받을 예정` : bal < 0 ? `${bal.toLocaleString()}원 내야 함` : "정산 완료"}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+
+            {/* 정산 방법 */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm">
+              <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
+                <Calculator className="w-4 h-4 text-indigo-600" />
+                <h2 className="font-bold text-slate-800">정산 방법</h2>
+              </div>
+              {settlements.length === 0 ? (
+                <p className="px-5 py-6 text-center text-slate-400 text-sm">모두 정산이 완료되었습니다 🎉</p>
+              ) : (
+                <ul className="divide-y divide-slate-100">
+                  {settlements.map((s, i) => (
+                    <li key={i} className="flex items-center gap-3 px-5 py-4">
+                      <span className="font-bold text-slate-800">{s.from}</span>
+                      <ArrowRight className="w-4 h-4 text-slate-400 shrink-0" />
+                      <span className="font-bold text-slate-800">{s.to}</span>
+                      <span className="ml-auto font-bold text-indigo-600">{s.amount.toLocaleString()}원</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Add Expense Modal */}
+        {showAddExpense && (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="text-lg font-bold text-slate-900">지출 추가</h3>
+                <button onClick={() => setShowAddExpense(false)} className="p-1.5 rounded-lg hover:bg-slate-100"><X className="w-5 h-5" /></button>
+              </div>
+
+              {/* OCR 영수증 스캔 */}
+              <input ref={fileInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleOcrUpload} />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={ocrLoading}
+                className="w-full flex items-center justify-center gap-2 py-2.5 mb-4 rounded-xl border-2 border-dashed border-indigo-300 text-indigo-600 text-sm font-medium hover:bg-indigo-50 transition-colors disabled:opacity-50"
+              >
+                {ocrLoading ? <><Loader2 className="w-4 h-4 animate-spin" />영수증 인식 중...</> : <><Camera className="w-4 h-4" />영수증 사진으로 자동 입력</>}
+              </button>
+
+              {ocrItems.length > 0 && (
+                <div className="mb-4 p-3 bg-indigo-50 rounded-xl text-sm">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="font-medium text-indigo-700">인식된 항목 <span className="text-indigo-400 font-normal">(직접 수정 가능)</span></p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const total = ocrItems.reduce((s, it) => s + (Number(it.price) || 0), 0);
+                        if (total > 0) setExpAmount(String(total));
+                      }}
+                      className="text-xs text-indigo-600 font-medium underline hover:text-indigo-800"
+                    >
+                      합계 금액에 반영
+                    </button>
+                  </div>
+                  <ul className="space-y-1.5">
+                    {ocrItems.map((item, i) => (
+                      <li key={i} className="flex gap-2 items-center">
+                        <input
+                          value={item.name}
+                          onChange={(e) => setOcrItems((prev) => prev.map((it, idx) => idx === i ? { ...it, name: e.target.value } : it))}
+                          className="flex-1 min-w-0 bg-white border border-indigo-200 rounded-lg px-2 py-1 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                          placeholder="품목명"
+                        />
+                        <input
+                          type="number"
+                          value={item.price}
+                          onChange={(e) => setOcrItems((prev) => prev.map((it, idx) => idx === i ? { ...it, price: Number(e.target.value) } : it))}
+                          className="w-24 bg-white border border-indigo-200 rounded-lg px-2 py-1 text-xs text-slate-800 text-right focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                          placeholder="가격"
+                        />
+                        <span className="text-indigo-500 text-xs shrink-0">원</span>
+                        <button
+                          type="button"
+                          onClick={() => setOcrItems((prev) => prev.filter((_, idx) => idx !== i))}
+                          className="shrink-0 text-slate-300 hover:text-red-400 transition-colors"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    type="button"
+                    onClick={() => setOcrItems((prev) => [...prev, { name: "", price: 0 }])}
+                    className="mt-2 w-full text-xs text-indigo-500 hover:text-indigo-700 py-1 border border-dashed border-indigo-300 rounded-lg transition-colors"
+                  >
+                    + 항목 추가
+                  </button>
+                </div>
+              )}
+
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm font-medium text-slate-700 mb-1 block">내용</label>
+                  <input value={expDesc} onChange={(e) => setExpDesc(e.target.value)} placeholder="ex. 저녁 식사" className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-sm font-medium text-slate-700 mb-1 block">카테고리</label>
+                    <select value={expCategory} onChange={(e) => setExpCategory(e.target.value)} className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                      {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium text-slate-700 mb-1 block">금액 (원)</label>
+                    <input type="number" value={expAmount} onChange={(e) => setExpAmount(e.target.value)} placeholder="0" className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-700 mb-1 block">결제한 사람</label>
+                  <select value={expPaidBy} onChange={(e) => setExpPaidBy(e.target.value)} className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                    {selectedGroup.members.map((m) => <option key={m}>{m}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-700 mb-2 block">참여 인원</label>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedGroup.members.map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setExpParticipants((prev) => prev.includes(m) ? prev.filter((p) => p !== m) : [...prev, m])}
+                        className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${expParticipants.includes(m) ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600"}`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-3 mt-6">
+                <button onClick={() => setShowAddExpense(false)} className="flex-1 py-2.5 rounded-xl border border-slate-300 text-slate-600 font-medium text-sm hover:bg-slate-50">취소</button>
+                <button onClick={handleAddExpense} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700">추가</button>
+              </div>
+            </div>
           </div>
         )}
       </div>
+    );
+  }
 
-      {/* 인원 설정 */}
-      <div className="mb-6">
-        <h2 className="text-lg font-bold text-slate-900 mb-3">인원 설정</h2>
-        <div className="flex items-center gap-2 mb-3">
-          <span className="text-sm text-slate-700 mr-1">인원 수</span>
-          <button
-            onClick={() => persons.length > 1 && setPersons((p) => p.slice(0, -1))}
-            className="w-7 h-7 flex items-center justify-center border border-slate-300 rounded text-slate-600 hover:bg-slate-50"
-          >
-            <Minus className="w-3 h-3" />
-          </button>
-          <span className="font-bold text-slate-900 w-5 text-center text-sm">{persons.length}</span>
-          <button
-            onClick={() => setAddingPerson(true)}
-            className="w-7 h-7 flex items-center justify-center border border-slate-300 rounded text-slate-600 hover:bg-slate-50"
-          >
-            <Plus className="w-3 h-3" />
-          </button>
-          <ChevronUp className="w-4 h-4 text-slate-400" />
+  // ── GROUP LIST VIEW ──
+  return (
+    <div className="flex-1 flex flex-col max-w-4xl mx-auto w-full px-4 py-12 md:py-20">
+      <div className="text-center mb-10">
+        <div className="inline-flex items-center justify-center w-16 h-16 bg-indigo-100 text-indigo-600 rounded-2xl mb-6">
+          <Receipt className="w-8 h-8" />
         </div>
-
-        <div className="flex flex-wrap gap-2">
-          {persons.map((person) => (
-            <div
-              key={person.id}
-              className="flex items-center gap-1.5 border border-slate-300 rounded-full px-3 py-1.5 text-sm bg-white"
-            >
-              <div className="w-4 h-4 rounded bg-indigo-600 flex items-center justify-center shrink-0">
-                <Check className="w-2.5 h-2.5 text-white" />
-              </div>
-              <span className="text-slate-700">{person.name}</span>
-              <button onClick={() => removePerson(person.id)} className="text-slate-400 hover:text-red-400 ml-0.5">
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          ))}
-
-          {addingPerson ? (
-            <div className="flex items-center gap-1.5">
-              <input
-                autoFocus
-                value={newPersonName}
-                onChange={(e) => setNewPersonName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") addPerson(); if (e.key === "Escape") { setAddingPerson(false); setNewPersonName(""); } }}
-                className="border border-indigo-400 rounded-full px-3 py-1.5 text-sm w-24 outline-none"
-                placeholder="이름"
-              />
-              <button onClick={addPerson} className="text-indigo-600 text-sm font-medium">확인</button>
-              <button onClick={() => { setAddingPerson(false); setNewPersonName(""); }} className="text-slate-400 text-sm">취소</button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setAddingPerson(true)}
-              className="flex items-center gap-1.5 border border-dashed border-slate-300 rounded-full px-3 py-1.5 text-sm text-slate-500 hover:border-indigo-400 hover:text-indigo-500 transition-colors"
-            >
-              <Plus className="w-3 h-3" />
-              추가
-            </button>
-          )}
-        </div>
+        <h1 className="text-3xl md:text-4xl font-bold text-slate-900 mb-4">
+          복잡한 여행 경비, <span className="text-indigo-600">간편하게 정산하세요</span>
+        </h1>
+        <p className="text-lg text-slate-600 max-w-2xl mx-auto">
+          일행과 함께한 여행의 모든 지출을 기록하고, 버튼 한 번으로 더치페이 금액을 나누세요.
+        </p>
       </div>
 
-      {/* 영수증 금액 확인 + 각자 낼 금액: 업로드 후에만 표시 */}
-      {hasUploaded && !ocrLoading && (
-        <div className="flex gap-6 items-start">
-          {/* 영수증 금액 확인 */}
-          <div className="flex-1">
-            <h2 className="text-lg font-bold text-slate-900 mb-3">영수증 금액 확인</h2>
-            <div className="flex gap-3">
-              {/* 1/N 균등 분할 */}
-              <div
-                className={`border rounded-xl p-4 cursor-pointer transition-all shrink-0 ${
-                  splitMode === "equal" ? "border-indigo-400 bg-indigo-50" : "border-slate-200"
-                }`}
-                onClick={() => setSplitMode("equal")}
-              >
-                <div className="flex items-center gap-2 mb-3">
-                  <div
-                    className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
-                      splitMode === "equal" ? "border-indigo-600" : "border-slate-300"
-                    }`}
-                  >
-                    {splitMode === "equal" && <div className="w-2 h-2 bg-indigo-600 rounded-full" />}
-                  </div>
-                  <span className="font-bold text-indigo-600 text-sm">1/N 균등 분할</span>
-                </div>
-                <div className="text-xs space-y-1 min-w-[100px]">
-                  <div className="flex justify-between gap-4">
-                    <span className="text-slate-500">총 지</span>
-                    <span className="font-medium text-slate-700">{totalAmount.toLocaleString()}원</span>
-                  </div>
-                  <div className="flex justify-between gap-4">
-                    <span className="text-slate-500">{persons.length}명</span>
-                    <span className="font-bold text-slate-800">{perPersonEqual.toLocaleString()}원</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* 항목별 선택 */}
-              <div
-                className={`flex-1 border rounded-xl overflow-hidden cursor-pointer transition-all ${
-                  splitMode === "item" ? "border-emerald-400" : "border-slate-200"
-                }`}
-                onClick={() => setSplitMode("item")}
-              >
-                <div
-                  className={`px-3 py-2 flex items-center gap-2 ${
-                    splitMode === "item" ? "bg-emerald-50" : "bg-slate-50"
-                  }`}
-                >
-                  <span className="text-xs font-semibold text-slate-700">총 금액 지정</span>
-                  {splitMode === "item" && (
-                    <span className="ml-auto flex items-center gap-1 text-emerald-600 font-bold text-sm">
-                      <Check className="w-3.5 h-3.5" />
-                      {selectedAmount.toLocaleString()}
-                    </span>
-                  )}
-                </div>
-                <div className="p-3 space-y-2">
-                  {items.length === 0 ? (
-                    <p className="text-xs text-slate-400 py-2 text-center">인식된 항목이 없습니다.</p>
-                  ) : (
-                    items.map((item) => (
-                      <div key={item.id} className="flex items-center gap-2 text-xs">
-                        <div
-                          className={`w-4 h-4 rounded flex items-center justify-center shrink-0 cursor-pointer ${
-                            item.checked ? "bg-indigo-600" : "border border-slate-300 bg-white"
-                          }`}
-                          onClick={(e) => { e.stopPropagation(); toggleItem(item.id); }}
-                        >
-                          {item.checked && <Check className="w-2.5 h-2.5 text-white" />}
-                        </div>
-                        <span className="flex-1 text-slate-700">{item.name}</span>
-                        <span className="text-slate-600">{item.price.toLocaleString()}원</span>
-                        <span className="text-slate-400">
-                          +1인 {persons.length > 0 ? Math.ceil(item.price / persons.length).toLocaleString() : 0}원
-                        </span>
-                      </div>
-                    ))
-                  )}
-                  {/* 항목 추가 행 */}
-                  <div className="flex items-center gap-1.5 pt-1.5 border-t border-slate-100" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      value={newItemName}
-                      onChange={(e) => setNewItemName(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && addItem()}
-                      placeholder="항목명"
-                      className="flex-1 text-xs border border-slate-200 rounded px-2 py-1 outline-none focus:border-indigo-400"
-                    />
-                    <input
-                      value={newItemPrice}
-                      onChange={(e) => setNewItemPrice(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && addItem()}
-                      placeholder="금액"
-                      type="number"
-                      className="w-16 text-xs border border-slate-200 rounded px-2 py-1 outline-none focus:border-indigo-400"
-                    />
-                    <button
-                      onClick={addItem}
-                      className="text-xs text-indigo-600 font-medium px-1.5 py-1 hover:bg-indigo-50 rounded"
-                    >
-                      추가
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* 각자 낼 금액 */}
-          <div className="w-64 shrink-0">
-            <h2 className="text-lg font-bold text-slate-900 mb-3">각자 낼 금액</h2>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-2 mb-4">
-              {persons.map((person) => (
-                <div key={person.id} className="flex items-center gap-1.5">
-                  <div className="w-4 h-4 rounded bg-indigo-600 flex items-center justify-center shrink-0">
-                    <Check className="w-2.5 h-2.5 text-white" />
-                  </div>
-                  <span className="text-xs text-slate-700 truncate">{person.name}</span>
-                  <span className="text-xs font-medium text-slate-800 ml-auto whitespace-nowrap">
-                    {amountPerPerson.toLocaleString()}원
-                  </span>
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <button className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-slate-900 font-bold py-3 rounded-xl text-sm flex items-center justify-center gap-1.5 transition-colors">
-                <span>💬</span>
-                정산 공유
-                <span className="text-xs">›</span>
-              </button>
-              <button
-                onClick={handleReset}
-                className="flex-1 border border-slate-300 text-slate-700 font-medium py-3 rounded-xl text-sm hover:bg-slate-50 transition-colors"
-              >
-                다시 계산
-              </button>
-            </div>
-          </div>
+      {groups.length > 0 && (
+        <div className="flex justify-end mb-4">
+          <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm hover:bg-indigo-700 transition-colors shadow-sm">
+            <Plus className="w-4 h-4" />
+            새 정산 그룹 만들기
+          </button>
         </div>
       )}
 
-      {/* OCR 로딩 중 하단 플레이스홀더 */}
-      {hasUploaded && ocrLoading && (
-        <div className="flex items-center justify-center gap-3 py-10 text-slate-400">
-          <Loader2 className="w-5 h-5 animate-spin" />
-          <span className="text-sm">영수증을 분석하는 중입니다...</span>
+      {groups.length === 0 ? (
+        <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-12 text-center max-w-2xl mx-auto w-full">
+          <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-6">
+            <Users className="w-10 h-10 text-slate-400" />
+          </div>
+          <h2 className="text-xl font-bold text-slate-800 mb-2">정산 그룹이 없습니다</h2>
+          <p className="text-slate-500 mb-6 text-sm">새 정산 그룹을 만들어 경비를 관리해보세요.</p>
+          <button onClick={() => setShowCreate(true)} className="flex items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-colors mx-auto">
+            <Plus className="w-4 h-4" />
+            새 정산 그룹 만들기
+          </button>
+        </div>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {groups.map((g) => {
+            const total = g.expenses.reduce((s, e) => s + e.amount, 0);
+            return (
+              <div key={g.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all p-5 flex items-center gap-4 cursor-pointer" onClick={() => setSelectedId(g.id)}>
+                <div className="w-12 h-12 bg-indigo-50 rounded-xl flex items-center justify-center shrink-0">
+                  <Receipt className="w-6 h-6 text-indigo-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-bold text-slate-900 truncate">{g.name}</h3>
+                  <p className="text-sm text-slate-500">{g.members.join(", ")}</p>
+                  <p className="text-sm font-medium text-indigo-600 mt-0.5">총 {total.toLocaleString()}원 · {g.expenses.length}건</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={(e) => { e.stopPropagation(); deleteGroup(g.id); }} className="p-1.5 rounded-lg text-slate-300 hover:text-red-400 hover:bg-red-50 transition-colors">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                  <ChevronRight className="w-5 h-5 text-slate-300" />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Create Group Modal */}
+      {showCreate && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-lg font-bold text-slate-900">새 정산 그룹 만들기</h3>
+              <button onClick={() => setShowCreate(false)} className="p-1.5 rounded-lg hover:bg-slate-100"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium text-slate-700 mb-1 block">여행 이름</label>
+                <input value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} placeholder="ex. 제주도 여행" className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-slate-700 mb-1 block">멤버 추가 (최소 2명)</label>
+                <div className="flex gap-2">
+                  <input
+                    value={newMemberInput}
+                    onChange={(e) => setNewMemberInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && addMember()}
+                    placeholder="이름 입력 후 Enter"
+                    className="flex-1 border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  />
+                  <button onClick={addMember} className="px-3 py-2.5 bg-slate-100 rounded-xl text-sm font-medium hover:bg-slate-200 transition-colors">추가</button>
+                </div>
+                {newMembers.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {newMembers.map((m) => (
+                      <span key={m} className="flex items-center gap-1 px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-full text-sm">
+                        {m}
+                        <button onClick={() => setNewMembers((prev) => prev.filter((x) => x !== m))} className="hover:text-red-500"><X className="w-3 h-3" /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => setShowCreate(false)} className="flex-1 py-2.5 rounded-xl border border-slate-300 text-slate-600 font-medium text-sm hover:bg-slate-50">취소</button>
+              <button onClick={handleCreateGroup} disabled={!newGroupName.trim() || newMembers.length < 2} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">
+                만들기
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

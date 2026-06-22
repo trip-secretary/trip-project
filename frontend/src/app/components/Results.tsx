@@ -1,322 +1,378 @@
 import { useEffect, useState } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router";
-import { Loader2, MapPin, Calendar as CalendarIcon, Clock, Coffee, Camera, Compass, Utensils, Moon, CheckCircle2, Target, Plus, X, Sparkles } from "lucide-react";
+import {
+  Loader2, MapPin, Calendar as CalendarIcon, Coffee, Camera,
+  Compass, Utensils, Moon, CheckCircle2, Plus, X, Sparkles,
+  Sun, CloudRain, Cloud, AlertCircle, Bookmark, IndianRupee,
+  Clock, Home
+} from "lucide-react";
 import TravelMap from "./TravelMap";
+import { generateItinerary, type PlanResult, type ItineraryItem, type DayPlan, type DayWeather } from "../../lib/api";
+import { useAuth } from "../../contexts/AuthContext";
+import { supabase } from "../../lib/supabase";
 
-// Mock data generator
-const generateMockItineraries = (dest: string, days: number, purposes: string[]) => {
-  const themes = [
-    {
-      id: "theme1",
-      title: purposes.includes("미식") ? "🔥 로컬 맛집 & 핫플 탐험" : "🔥 열정의 액티비티 & 핫플 탐험",
-      description: `에너지가 넘치는 당신을 위한 완벽한 코스. ${dest}의 유명 명소와 숨겨진 핫플레이스를 부지런히 돌아다니며 알차게 보내는 일정입니다.`,
-      color: "blue",
-      estimatedCost: 850000
-    },
-    {
-      id: "theme2",
-      title: purposes.includes("휴양") ? "🍃 완벽한 프라이빗 휴식" : "🍃 여유로운 힐링 & 미식 여행",
-      description: `바쁜 일상에서 벗어나 온전한 휴식을 원하는 당신. ${dest}의 아름다운 풍경을 감상하며 여유롭게 커피 한 잔과 미식을 즐기는 일정입니다.`,
-      color: "emerald",
-      estimatedCost: 1200000
-    }
-  ];
+// ---------- 로딩 화면 ----------
+const LOADING_STEPS = [
+  { text: "날씨 정보를 가져오는 중...", icon: "🌤️" },
+  { text: "실외 중심 Plan A 설계 중...", icon: "☀️" },
+  { text: "실내 중심 Plan B 설계 중...", icon: "🌧️" },
+  { text: "혼합 Plan C 설계 중...", icon: "⛅" },
+  { text: "동선 최적화 중...", icon: "🗺️" },
+  { text: "거의 다 됐어요!", icon: "✨" },
+];
 
-  const activities = [
-    { time: "09:00", icon: <Coffee className="w-4 h-4" />, title: "현지 감성 카페에서 조식", type: "food", lat: 37.5800, lng: 126.9800 },
-    { time: "11:00", icon: <Camera className="w-4 h-4" />, title: "랜드마크 인증샷 투어", type: "activity", lat: 37.5820, lng: 126.9850 },
-    { time: "13:00", icon: <Utensils className="w-4 h-4" />, title: "로컬 맛집에서 점심 식사", type: "food", lat: 37.5750, lng: 126.9820 },
-    { time: "15:00", icon: <Compass className="w-4 h-4" />, title: "유명 명소/테마파크 관람", type: "activity", lat: 37.5600, lng: 126.9900 },
-    { time: "19:00", icon: <Moon className="w-4 h-4" />, title: "야경 명소 산책 및 저녁 식사", type: "activity", lat: 37.5500, lng: 126.9800 },
-  ];
+function LoadingScreen({ dest }: { dest: string }) {
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setStep((s) => (s < LOADING_STEPS.length - 1 ? s + 1 : s));
+    }, 4000);
+    return () => clearInterval(interval);
+  }, []);
 
-  const healingActivities = [
-    { time: "10:30", icon: <Coffee className="w-4 h-4" />, title: "늦잠 후 여유로운 브런치", type: "food", lat: 37.5500, lng: 126.9700 },
-    { time: "13:00", icon: <Compass className="w-4 h-4" />, title: "해변이나 공원에서 산책", type: "activity", lat: 37.5450, lng: 126.9750 },
-    { time: "15:30", icon: <Coffee className="w-4 h-4" />, title: "경치 좋은 디저트 카페", type: "food", lat: 37.5400, lng: 126.9800 },
-    { time: "18:00", icon: <Moon className="w-4 h-4" />, title: "고급 레스토랑에서 저녁 만찬", type: "food", lat: 37.5350, lng: 126.9900 },
-    { time: "20:30", icon: <Moon className="w-4 h-4" />, title: "숙소에서 스파 및 휴식", type: "activity", lat: 37.5300, lng: 126.9950 },
-  ];
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center min-h-[60vh]">
+      <div className="relative mb-8">
+        <div className="w-24 h-24 rounded-full bg-indigo-100 flex items-center justify-center text-4xl animate-bounce">
+          {LOADING_STEPS[step].icon}
+        </div>
+        <Loader2 className="absolute -bottom-1 -right-1 w-7 h-7 text-indigo-500 animate-spin" />
+      </div>
+      <h2 className="text-2xl font-bold text-slate-800 mb-2">
+        <span className="text-indigo-600">{dest}</span> 여행 일정 생성 중
+      </h2>
+      <p className="text-slate-500 mb-6 transition-all duration-500">{LOADING_STEPS[step].text}</p>
+      <div className="flex gap-1.5 mb-8">
+        {LOADING_STEPS.map((_, i) => (
+          <div key={i} className={`h-1.5 rounded-full transition-all duration-500 ${i <= step ? "bg-indigo-500 w-6" : "bg-slate-200 w-3"}`} />
+        ))}
+      </div>
+      <p className="text-xs text-slate-400">AI가 A·B·C 세 가지 플랜을 동시에 구성합니다 · 약 20~30초 소요</p>
+    </div>
+  );
+}
 
-  return themes.map(theme => ({
-    ...theme,
-    days: Array.from({ length: days }).map((_, i) => ({
-      day: i + 1,
-      items: theme.id === "theme1" ? activities : healingActivities
-    }))
-  }));
-};
+function getCategoryIcon(category: string, isIndoor: boolean) {
+  if (category === "food") return <Utensils className="w-4 h-4" />;
+  if (category === "rest") return <Moon className="w-4 h-4" />;
+  if (isIndoor) return <Home className="w-4 h-4" />;
+  return <Compass className="w-4 h-4" />;
+}
+
+const PLAN_CONFIG = {
+  A: {
+    label: "Plan A", badge: "☀️ 실외 중심", color: "blue",
+    bgHeader: "bg-blue-50", textTitle: "text-blue-900", badgeBg: "bg-blue-600",
+    border: "border-blue-200", ring: "ring-blue-400",
+    tab: "bg-blue-600 text-white", tabInactive: "text-blue-600 border-blue-200 hover:bg-blue-50",
+    icon: <Sun className="w-4 h-4" />,
+  },
+  B: {
+    label: "Plan B", badge: "🌧️ 실내 중심", color: "emerald",
+    bgHeader: "bg-emerald-50", textTitle: "text-emerald-900", badgeBg: "bg-emerald-600",
+    border: "border-emerald-200", ring: "ring-emerald-400",
+    tab: "bg-emerald-600 text-white", tabInactive: "text-emerald-600 border-emerald-200 hover:bg-emerald-50",
+    icon: <CloudRain className="w-4 h-4" />,
+  },
+  C: {
+    label: "Plan C", badge: "🌤️ 실내+실외 혼합", color: "amber",
+    bgHeader: "bg-amber-50", textTitle: "text-amber-900", badgeBg: "bg-amber-500",
+    border: "border-amber-200", ring: "ring-amber-400",
+    tab: "bg-amber-500 text-white", tabInactive: "text-amber-600 border-amber-200 hover:bg-amber-50",
+    icon: <Cloud className="w-4 h-4" />,
+  },
+} as const;
+
+type PlanType = keyof typeof PLAN_CONFIG;
+
+function makeItemId(planType: string, day: number, time: string) {
+  return `${planType}-day${day}-${time}`;
+}
 
 export function Results() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
+
   const dest = searchParams.get("dest") || "어딘가";
-  const start = searchParams.get("start");
-  const end = searchParams.get("end");
+  const start = searchParams.get("start") || "";
+  const end = searchParams.get("end") || "";
   const purposeParam = searchParams.get("purpose") || "관광";
-  const purposes = purposeParam.split(',');
-  
+  const purposes = purposeParam.split(",");
+
   const [loading, setLoading] = useState(true);
-  const [itineraries, setItineraries] = useState<any[]>([]);
-  const [selectedItinerary, setSelectedItinerary] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [weatherSummary, setWeatherSummary] = useState("");
+  const [weatherByDate, setWeatherByDate] = useState<Record<string, DayWeather>>({});
+  const [plans, setPlans] = useState<PlanResult[]>([]);
+  const [activeTab, setActiveTab] = useState<PlanType>("A");
   const [customItems, setCustomItems] = useState<any[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   const purposeOptions = [
     { value: "관광", label: "관광 & 명소 투어" },
     { value: "휴양", label: "휴식 & 힐링" },
-    { value: "미식", label: "맛집 탐방 (미식)" },
+    { value: "미식", label: "맛집 탐방" },
     { value: "액티비티", label: "스포츠 & 액티비티" },
-    { value: "쇼핑", label: "쇼핑" }
+    { value: "쇼핑", label: "쇼핑" },
   ];
 
   const togglePurpose = (value: string) => {
-    let newPurposes: string[];
+    let next: string[];
     if (purposes.includes(value)) {
-      if (purposes.length > 1) {
-        newPurposes = purposes.filter(p => p !== value);
-      } else {
-        return;
-      }
+      if (purposes.length <= 1) return;
+      next = purposes.filter((p) => p !== value);
     } else {
-      newPurposes = [...purposes, value];
+      next = [...purposes, value];
     }
-    navigate(`/results?dest=${encodeURIComponent(dest)}&start=${start}&end=${end}&purpose=${encodeURIComponent(newPurposes.join(','))}`);
+    navigate(`/results?dest=${encodeURIComponent(dest)}&start=${start}&end=${end}&purpose=${encodeURIComponent(next.join(","))}`);
   };
-
-  const toggleCustomItem = (item: any, themeId: string, day: number) => {
-    const itemId = `${themeId}-day${day}-${item.time}`;
-    const itemWithId = { ...item, id: itemId, themeId, day };
-
-    const isAlreadySelected = customItems.some(i => i.id === itemId);
-    if (isAlreadySelected) {
-      setCustomItems(customItems.filter(i => i.id !== itemId));
-    } else {
-      setCustomItems([...customItems, itemWithId]);
-    }
-  };
-
-  const isItemSelected = (item: any, themeId: string, day: number) => {
-    const itemId = `${themeId}-day${day}-${item.time}`;
-    return customItems.some(i => i.id === itemId);
-  };
-
-  const sortedCustomItems = [...customItems].sort((a, b) => {
-    if (a.day !== b.day) return a.day - b.day;
-    return a.time.localeCompare(b.time);
-  });
 
   useEffect(() => {
-    // Simulate API call to LLM
-    const timer = setTimeout(() => {
-      let days = 3;
-      if (start && end) {
-        const startDate = new Date(start);
-        const endDate = new Date(end);
-        const diffTime = Math.abs(endDate.getTime() - startDate.getTime());
-        days = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-        // Cap max days for UI sake
-        if (days > 7) days = 7;
-      }
-      setItineraries(generateMockItineraries(dest, days, purposes));
-      setLoading(false);
-    }, 2500);
+    setLoading(true);
+    setError(null);
+    setPlans([]);
+    setCustomItems([]);
 
-    return () => clearTimeout(timer);
+    generateItinerary({ destination: dest, start_date: start, end_date: end, purposes })
+      .then((data) => {
+        setWeatherSummary(data.weather_summary);
+        setWeatherByDate(data.weather_by_date ?? {});
+        setPlans(data.plans);
+        if (data.plans.length > 0) setActiveTab(data.plans[0].plan_type as PlanType);
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
   }, [dest, start, end, purposeParam]);
 
-  if (loading) {
+  const toggleCustomItem = (item: ItineraryItem, planType: string, day: number) => {
+    const id = makeItemId(planType, day, item.time);
+    const withId = { ...item, id, planType, day };
+    setCustomItems((prev) =>
+      prev.some((i) => i.id === id) ? prev.filter((i) => i.id !== id) : [...prev, withId]
+    );
+  };
+
+  const isSelected = (item: ItineraryItem, planType: string, day: number) =>
+    customItems.some((i) => i.id === makeItemId(planType, day, item.time));
+
+  const sortedCustom = [...customItems].sort((a, b) =>
+    a.day !== b.day ? a.day - b.day : a.time.localeCompare(b.time)
+  );
+
+  const saveTripToSupabase = async (planType: string, title: string, days: DayPlan[], estimatedCost?: number) => {
+    if (!user) { navigate("/login"); return; }
+    setSaving(true);
+    setSaveMsg(null);
+    const { error } = await supabase.from("saved_trips").insert({
+      user_id: user.id,
+      destination: dest,
+      start_date: start,
+      end_date: end,
+      theme_id: planType,
+      theme_title: title,
+      plan_data: { days, estimated_cost: estimatedCost },
+    });
+    setSaveMsg(error ? "저장에 실패했습니다." : "저장 완료!");
+    setSaving(false);
+  };
+
+  const handleSavePlan = (plan: PlanResult) => {
+    saveTripToSupabase(plan.plan_type, plan.title, plan.days, plan.estimated_cost);
+  };
+
+  const handleSaveCustom = () => {
+    if (sortedCustom.length === 0) return;
+    const dayMap: Record<number, any[]> = {};
+    sortedCustom.forEach((item) => {
+      if (!dayMap[item.day]) dayMap[item.day] = [];
+      dayMap[item.day].push(item);
+    });
+    const days: DayPlan[] = Object.entries(dayMap).map(([day, items]) => ({
+      day: Number(day),
+      date: plans[0]?.days[Number(day) - 1]?.date ?? start,
+      items: items.map(({ id, planType, day: _d, ...rest }) => rest),
+    }));
+    saveTripToSupabase("custom", `${dest} 나만의 맞춤 일정`, days,
+      sortedCustom.reduce((s, i) => s + (i.estimated_cost ?? 0), 0));
+  };
+
+  if (loading) return <LoadingScreen dest={dest} />;
+
+  if (error) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center h-[calc(100vh-64px)]">
-        <Loader2 className="w-16 h-16 text-indigo-600 animate-spin mb-8" />
-        <h2 className="text-3xl font-bold text-slate-800 mb-4">완벽한 여행 경로를 고민 중입니다...</h2>
-        <p className="text-lg text-slate-500 max-w-lg mx-auto">
-          {dest}에서의 특별한 경험을 위해 완전히 다른 두 가지 테마의 일정을 생성하고 있습니다. 잠시만 기다려주세요.
-        </p>
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+        <AlertCircle className="w-14 h-14 text-red-400 mb-4" />
+        <h2 className="text-2xl font-bold text-slate-800 mb-2">일정 생성에 실패했습니다</h2>
+        <p className="text-slate-500 mb-6">{error}</p>
+        <Link to="/" className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-colors">
+          다시 검색하기
+        </Link>
       </div>
     );
   }
 
+  const activePlan = plans.find((p) => p.plan_type === activeTab);
+  const cfg = PLAN_CONFIG[activeTab];
+
   return (
-    <div className="flex-1 max-w-7xl w-full mx-auto px-4 py-8 mb-12">
-      <div className="mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-slate-200 pb-6">
+    <div className="flex-1 max-w-5xl w-full mx-auto px-4 py-8 mb-12">
+      <div className="mb-6 flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-slate-200 pb-6">
         <div>
-          <h1 className="text-3xl font-bold text-slate-900 mb-2">
-            <span className="text-indigo-600">{dest}</span> 여행을 위한 두 가지 제안
+          <h1 className="text-3xl font-bold text-slate-900 mb-1">
+            <span className="text-indigo-600">{dest}</span> 여행 일정 추천
           </h1>
-          <p className="text-sm text-slate-600 mb-3">각 경로에서 원하는 장소를 선택하여 나만의 맞춤 경로를 만들어보세요!</p>
-          <div className="flex flex-wrap items-center gap-4 text-slate-600 font-medium">
+          {weatherSummary && <p className="text-sm text-slate-500 mb-2">🌤 {weatherSummary}</p>}
+          <div className="flex flex-wrap items-center gap-3 text-slate-600 font-medium">
             <div className="flex items-center gap-1.5 bg-slate-100 px-3 py-1.5 rounded-full text-sm">
-              <CalendarIcon className="w-4 h-4" />
-              <span>{start} ~ {end} ({itineraries[0]?.days.length}일)</span>
+              <CalendarIcon className="w-4 h-4" /><span>{start} ~ {end}</span>
             </div>
             <div className="flex items-center gap-1.5 bg-slate-100 px-3 py-1.5 rounded-full text-sm">
-              <MapPin className="w-4 h-4" />
-              <span>{dest}</span>
+              <MapPin className="w-4 h-4" /><span>{dest}</span>
             </div>
           </div>
         </div>
-        <Link to="/" className="text-sm font-medium text-indigo-600 hover:text-white hover:bg-indigo-600 border border-indigo-600 px-5 py-2.5 rounded-xl transition-colors inline-block text-center whitespace-nowrap">
+        <Link to="/" className="text-sm font-medium text-indigo-600 hover:text-white hover:bg-indigo-600 border border-indigo-600 px-5 py-2.5 rounded-xl transition-colors whitespace-nowrap text-center">
           다시 검색하기
         </Link>
       </div>
 
-      <div className="mb-6 bg-slate-50 rounded-2xl p-6 border border-slate-200">
-        <div className="flex items-center gap-2 mb-3">
-          <Target className="w-5 h-5 text-slate-700" />
-          <h3 className="font-bold text-slate-900">여행 목적</h3>
-          <span className="text-xs text-slate-500">(변경 가능)</span>
-        </div>
-        <div className="flex flex-wrap gap-3">
-          {purposeOptions.map((option) => (
-            <label
-              key={option.value}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl border-2 cursor-pointer transition-all ${
-                purposes.includes(option.value)
-                  ? 'bg-indigo-50 border-indigo-500 text-indigo-700'
-                  : 'bg-white border-slate-300 text-slate-700 hover:border-indigo-300'
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={purposes.includes(option.value)}
-                onChange={() => togglePurpose(option.value)}
-                className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
-              />
-              <span className="text-sm font-medium">{option.label}</span>
+      <div className="mb-6 bg-slate-50 rounded-2xl p-5 border border-slate-200">
+        <p className="text-sm font-bold text-slate-700 mb-3">여행 목적 (변경 시 재생성)</p>
+        <div className="flex flex-wrap gap-2">
+          {purposeOptions.map((opt) => (
+            <label key={opt.value} className={`flex items-center gap-2 px-4 py-2 rounded-xl border-2 cursor-pointer transition-all text-sm font-medium ${
+              purposes.includes(opt.value)
+                ? "bg-indigo-50 border-indigo-500 text-indigo-700"
+                : "bg-white border-slate-300 text-slate-700 hover:border-indigo-300"
+            }`}>
+              <input type="checkbox" checked={purposes.includes(opt.value)} onChange={() => togglePurpose(opt.value)} className="w-3.5 h-3.5 text-indigo-600 rounded" />
+              {opt.label}
             </label>
           ))}
         </div>
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-8">
-        {itineraries.map((itinerary) => {
-          const isSelected = selectedItinerary === itinerary.id;
-          const colorClass = itinerary.color === 'blue' 
-            ? 'border-blue-200 hover:border-blue-400 focus:ring-blue-500' 
-            : 'border-emerald-200 hover:border-emerald-400 focus:ring-emerald-500';
-          
-          const bgHeader = itinerary.color === 'blue' ? 'bg-blue-50' : 'bg-emerald-50';
-          const textTitle = itinerary.color === 'blue' ? 'text-blue-900' : 'text-emerald-900';
-          const badgeBg = itinerary.color === 'blue' ? 'bg-blue-600' : 'bg-emerald-600';
-
+      <div className="flex gap-2 mb-6">
+        {plans.map((plan) => {
+          const c = PLAN_CONFIG[plan.plan_type as PlanType];
+          const isActive = activeTab === plan.plan_type;
           return (
-            <div
-              key={itinerary.id}
-              className={`bg-white rounded-3xl overflow-hidden border-2 transition-all duration-300 flex flex-col shadow-sm hover:shadow-xl ${colorClass} ${isSelected ? 'ring-2 ring-offset-2 scale-[1.02] shadow-xl' : 'border-slate-200'}`}
+            <button key={plan.plan_type} onClick={() => setActiveTab(plan.plan_type as PlanType)}
+              className={`flex items-center gap-2 px-5 py-3 rounded-xl font-bold text-sm transition-all border-2 flex-1 justify-center ${
+                isActive ? c.tab + " shadow-md border-transparent" : "bg-white " + c.tabInactive
+              }`}
             >
-              <div className={`p-6 md:p-8 ${bgHeader} border-b border-slate-100 flex-none relative`}>
-                {isSelected && (
-                  <div className="absolute top-4 right-4 bg-white rounded-full p-1 shadow-lg">
-                    <CheckCircle2 className={`w-8 h-8 ${itinerary.color === 'blue' ? 'text-blue-600' : 'text-emerald-600'}`} />
-                  </div>
-                )}
-                <div className={`inline-block px-3 py-1 rounded-full text-xs font-bold mb-3 ${badgeBg}`}>
-                  추천 경로 {itinerary.id === "theme1" ? "A" : "B"}
-                </div>
-                <h2 className="text-2xl md:text-3xl font-bold mb-4 text-slate-900">{itinerary.title}</h2>
-                <p className={`${textTitle} opacity-90 leading-relaxed font-medium text-[15px] mb-4`}>{itinerary.description}</p>
-                <div className="flex items-center gap-2">
-                  <div className={`px-2.5 py-1 rounded-md text-xs font-bold ${badgeBg} text-white`}>예상 경비</div>
-                  <div className="text-lg font-bold text-slate-800">
-                    약 {itinerary.estimatedCost.toLocaleString()}원 <span className="text-sm font-normal text-slate-500">/ 1인 기준</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-6 md:p-8 bg-slate-50 flex-1 overflow-y-auto max-h-[500px]">
-                <div className="mb-8 rounded-2xl overflow-hidden border border-slate-200 relative group bg-slate-200 shadow-inner h-64">
-                  <TravelMap spots={itinerary.days[0].items.map((item: any, idx: number) => ({ id: idx, name: item.title, lat: item.lat, lng: item.lng }))} />
-                  <div className="absolute top-3 left-3 z-20 bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-full text-xs font-bold text-slate-700 flex items-center gap-1.5 shadow-sm pointer-events-none">
-                    <MapPin className={`w-3.5 h-3.5 ${itinerary.color === 'blue' ? 'text-blue-600' : 'text-emerald-600'}`} /> {itinerary.id === "theme1" ? "액티비티 추천 동선" : "힐링 추천 동선"}
-                  </div>
-                </div>
-
-                <div className="space-y-10">
-                  {itinerary.days.map((dayPlan: any) => (
-                    <div key={`day-${dayPlan.day}`}>
-                      <h3 className="font-bold text-slate-800 text-xl mb-5 flex items-center gap-3">
-                        <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold text-white shadow-sm ${badgeBg}`}>
-                          {dayPlan.day}
-                        </span>
-                        <span>Day {dayPlan.day}</span>
-                      </h3>
-                      
-                      <div className="space-y-5 pl-4 relative before:absolute before:inset-y-2 before:left-[19px] before:w-0.5 before:bg-slate-200">
-                        {dayPlan.items.map((item: any, idx: number) => {
-                          const isSelected = isItemSelected(item, itinerary.id, dayPlan.day);
-                          return (
-                            <div key={idx} className="relative pl-8 flex gap-4 group">
-                              <div className={`absolute left-[-5px] top-1.5 w-4 h-4 rounded-full border-4 border-slate-50 ${badgeBg} z-10 shadow-sm`} />
-                              <div className="text-sm font-bold text-slate-500 w-12 shrink-0 pt-1">{item.time}</div>
-                              <div className={`bg-white p-4 rounded-xl border shadow-sm flex-1 flex items-start gap-3 transition-all ${
-                                isSelected
-                                  ? 'border-indigo-500 ring-2 ring-indigo-200'
-                                  : 'border-slate-100 group-hover:border-indigo-200 group-hover:shadow-md'
-                              }`}>
-                                <div className={`p-2.5 rounded-lg shrink-0 ${item.type === 'food' ? 'bg-orange-50 text-orange-600' : 'bg-indigo-50 text-indigo-600'}`}>
-                                  {item.icon}
-                                </div>
-                                <p className="font-medium text-slate-700 mt-1.5 flex-1">{item.title}</p>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    toggleCustomItem(item, itinerary.id, dayPlan.day);
-                                  }}
-                                  className={`shrink-0 p-2 rounded-lg transition-all ${
-                                    isSelected
-                                      ? 'bg-indigo-600 text-white'
-                                      : 'bg-slate-100 text-slate-600 hover:bg-indigo-100 hover:text-indigo-600'
-                                  }`}
-                                  title={isSelected ? "나만의 경로에서 제거" : "나만의 경로에 추가"}
-                                >
-                                  {isSelected ? <CheckCircle2 className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              
-              <div className="p-6 bg-white border-t border-slate-100 text-center flex-none space-y-3">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const allItems = itinerary.days.flatMap((day: any) =>
-                      day.items.map((item: any) => ({ ...item, themeId: itinerary.id, day: day.day, id: `${itinerary.id}-day${day.day}-${item.time}` }))
-                    );
-                    const allSelected = allItems.every((item: any) => customItems.some(i => i.id === item.id));
-                    if (allSelected) {
-                      setCustomItems(customItems.filter(i => !allItems.some((item: any) => item.id === i.id)));
-                    } else {
-                      const newItems = allItems.filter((item: any) => !customItems.some(i => i.id === item.id));
-                      setCustomItems([...customItems, ...newItems]);
-                    }
-                  }}
-                  className={`w-full py-4 rounded-xl font-bold text-lg transition-all shadow-sm ${badgeBg} text-white hover:opacity-90`}
-                >
-                  {itinerary.days.flatMap((day: any) => day.items).every((item: any) =>
-                    isItemSelected(item, itinerary.id, itinerary.days.find((d: any) => d.items.includes(item)).day)
-                  ) ? "이 경로 전체 해제" : "이 경로 전체 선택"}
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedItinerary(itinerary.id);
-                    alert("일정을 저장하려면 로그인이 필요합니다.");
-                  }}
-                  className="w-full py-3 rounded-xl font-medium text-sm bg-slate-100 text-slate-700 hover:bg-slate-200 transition-all"
-                >
-                  이 일정 그대로 저장하기
-                </button>
-              </div>
-            </div>
+              {c.icon}<span>{c.label}</span>
+              <span className="hidden sm:inline text-xs opacity-75">({plan.theme})</span>
+            </button>
           );
         })}
       </div>
+
+      {activePlan && (
+        <div className={`bg-white rounded-3xl overflow-hidden border-2 ${cfg.border} shadow-sm`}>
+          <div className={`p-6 md:p-8 ${cfg.bgHeader} border-b border-slate-100`}>
+            <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold mb-3 ${cfg.badgeBg} text-white`}>
+              {cfg.icon}{cfg.badge}
+            </div>
+            <h2 className="text-2xl md:text-3xl font-bold mb-3 text-slate-900">{activePlan.title}</h2>
+            <p className={`${cfg.textTitle} opacity-90 leading-relaxed font-medium text-sm mb-4`}>{activePlan.description}</p>
+            <div className="flex items-center gap-2">
+              <span className={`px-2.5 py-1 rounded-md text-xs font-bold ${cfg.badgeBg} text-white`}>예상 경비</span>
+              <span className="text-lg font-bold text-slate-800">
+                약 {activePlan.estimated_cost.toLocaleString()}원
+                <span className="text-sm font-normal text-slate-500"> / 1인 기준</span>
+              </span>
+            </div>
+          </div>
+
+          <div className="p-6 md:p-8 bg-slate-50">
+            <div className="mb-8 rounded-2xl overflow-hidden border border-slate-200 bg-slate-200 shadow-inner h-64">
+              <TravelMap
+                spots={activePlan.days[0]?.items
+                  .filter((i) => i.lat && i.lng)
+                  .map((item, idx) => ({ id: idx, name: item.place_name || item.title, lat: item.lat!, lng: item.lng! }))}
+              />
+            </div>
+
+            <div className="space-y-10">
+              {activePlan.days.map((dayPlan) => (
+                <div key={dayPlan.day}>
+                  <h3 className="font-bold text-slate-800 text-xl mb-5 flex items-center gap-3 flex-wrap">
+                    <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold text-white shadow-sm ${cfg.badgeBg}`}>{dayPlan.day}</span>
+                    <span>Day {dayPlan.day}</span>
+                    <span className="text-sm font-normal text-slate-500">{dayPlan.date}</span>
+                    {weatherByDate[dayPlan.date] && (() => {
+                      const w = weatherByDate[dayPlan.date];
+                      const tempStr = w.min_temp != null && w.max_temp != null ? ` ${w.min_temp}°~${w.max_temp}°` : "";
+                      return (
+                        <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${w.is_bad_weather ? "bg-blue-100 text-blue-700" : "bg-amber-50 text-amber-700"}`}>
+                          {w.emoji} {w.sky}{tempStr}
+                        </span>
+                      );
+                    })()}
+                  </h3>
+                  <div className="space-y-4 pl-4 relative before:absolute before:inset-y-2 before:left-[19px] before:w-0.5 before:bg-slate-200">
+                    {dayPlan.items.map((item, idx) => {
+                      const sel = isSelected(item, activePlan.plan_type, dayPlan.day);
+                      return (
+                        <div key={idx} className="relative pl-8 flex gap-4 group">
+                          <div className={`absolute left-[-5px] top-1.5 w-4 h-4 rounded-full border-4 border-slate-50 ${cfg.badgeBg} z-10 shadow-sm`} />
+                          <div className="text-sm font-bold text-slate-500 w-12 shrink-0 pt-1">{item.time}</div>
+                          <div className={`bg-white p-4 rounded-xl border shadow-sm flex-1 flex items-start gap-3 transition-all ${
+                            sel ? "border-indigo-500 ring-2 ring-indigo-200" : "border-slate-100 group-hover:border-indigo-200 group-hover:shadow-md"
+                          }`}>
+                            <div className={`p-2.5 rounded-lg shrink-0 ${item.category === "food" ? "bg-orange-50 text-orange-600" : "bg-indigo-50 text-indigo-600"}`}>
+                              {getCategoryIcon(item.category, item.is_indoor)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium text-slate-800">{item.title}</p>
+                              {item.place_name && item.place_name !== item.title && (
+                                <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1"><MapPin className="w-3 h-3" />{item.place_name}</p>
+                              )}
+                              {item.notes && <p className="text-xs text-slate-400 mt-1">{item.notes}</p>}
+                              <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-500">
+                                {item.duration_minutes && (
+                                  <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{item.duration_minutes}분</span>
+                                )}
+                                {item.estimated_cost != null && item.estimated_cost > 0 && (
+                                  <span className="flex items-center gap-1"><IndianRupee className="w-3 h-3" />{item.estimated_cost.toLocaleString()}원</span>
+                                )}
+                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${item.is_indoor ? "bg-blue-100 text-blue-700" : "bg-green-100 text-green-700"}`}>
+                                  {item.is_indoor ? "실내" : "실외"}
+                                </span>
+                              </div>
+                            </div>
+                            <button onClick={() => toggleCustomItem(item, activePlan.plan_type, dayPlan.day)}
+                              className={`shrink-0 p-2 rounded-lg transition-all ${sel ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-500 hover:bg-indigo-100 hover:text-indigo-600"}`}
+                            >
+                              {sel ? <CheckCircle2 className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="p-6 bg-white border-t border-slate-100 space-y-3">
+            {saveMsg && (
+              <p className={`text-sm text-center font-medium ${saveMsg.includes("완료") ? "text-green-600" : "text-red-500"}`}>{saveMsg}</p>
+            )}
+            <button onClick={() => handleSavePlan(activePlan)} disabled={saving}
+              className={`w-full py-4 rounded-xl font-bold text-lg transition-all shadow-sm text-white ${cfg.badgeBg} hover:opacity-90 disabled:opacity-60 flex items-center justify-center gap-2`}
+            >
+              <Bookmark className="w-5 h-5" />
+              {saving ? "저장 중..." : "이 일정 저장하기"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {customItems.length > 0 && (
         <div className="mt-12 bg-gradient-to-br from-indigo-50 to-purple-50 rounded-3xl p-8 border-2 border-indigo-200 shadow-xl">
@@ -327,56 +383,47 @@ export function Results() {
               </div>
               <div>
                 <h2 className="text-2xl font-bold text-slate-900">나만의 맞춤 경로</h2>
-                <p className="text-sm text-slate-600">Plan A와 Plan B에서 선택한 {customItems.length}개의 장소</p>
+                <p className="text-sm text-slate-600">
+                  {Array.from(new Set(sortedCustom.map((i) => i.planType))).map((t) => `Plan ${t}`).join(" + ")}에서 선택한 {customItems.length}개 장소
+                </p>
               </div>
             </div>
-            <button
-              onClick={() => setCustomItems([])}
-              className="text-sm font-medium text-slate-600 hover:text-slate-900 px-4 py-2 hover:bg-white rounded-lg transition-colors"
-            >
+            <button onClick={() => setCustomItems([])} className="text-sm font-medium text-slate-600 hover:text-slate-900 px-4 py-2 hover:bg-white rounded-lg transition-colors">
               전체 초기화
             </button>
           </div>
 
           <div className="bg-white rounded-2xl p-6 shadow-sm">
-            <div className="mb-6 rounded-xl overflow-hidden border border-slate-200 relative bg-slate-200 shadow-inner h-64">
-              <TravelMap spots={sortedCustomItems.map((item: any, idx: number) => ({ id: idx, name: item.title, lat: item.lat, lng: item.lng }))} />
-              <div className="absolute top-3 left-3 z-20 bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-full text-xs font-bold text-slate-700 flex items-center gap-1.5 shadow-sm pointer-events-none">
-                <MapPin className="w-3.5 h-3.5 text-indigo-600" /> 나만의 맞춤 동선
-              </div>
+            <div className="mb-6 rounded-xl overflow-hidden border border-slate-200 bg-slate-200 shadow-inner h-64">
+              <TravelMap
+                spots={sortedCustom.filter((i) => i.lat && i.lng)
+                  .map((item, idx) => ({ id: idx, name: item.place_name || item.title, lat: item.lat, lng: item.lng }))}
+              />
             </div>
-
             <div className="space-y-8">
-              {Array.from(new Set(sortedCustomItems.map(item => item.day))).map(day => {
-                const dayItems = sortedCustomItems.filter(item => item.day === day);
+              {Array.from(new Set(sortedCustom.map((i) => i.day))).map((day) => {
+                const dayItems = sortedCustom.filter((i) => i.day === day);
                 return (
                   <div key={day}>
                     <h3 className="font-bold text-slate-800 text-xl mb-5 flex items-center gap-3">
-                      <span className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold text-white bg-indigo-600 shadow-sm">
-                        {day}
-                      </span>
+                      <span className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold text-white bg-indigo-600 shadow-sm">{day}</span>
                       <span>Day {day}</span>
                     </h3>
-
                     <div className="space-y-4 pl-4 relative before:absolute before:inset-y-2 before:left-[19px] before:w-0.5 before:bg-slate-200">
                       {dayItems.map((item: any) => (
                         <div key={item.id} className="relative pl-8 flex gap-4 group">
                           <div className="absolute left-[-5px] top-1.5 w-4 h-4 rounded-full border-4 border-white bg-indigo-600 z-10 shadow-sm" />
                           <div className="text-sm font-bold text-slate-500 w-12 shrink-0 pt-1">{item.time}</div>
                           <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm flex-1 flex items-start gap-3 group-hover:border-indigo-300 transition-all">
-                            <div className={`p-2.5 rounded-lg shrink-0 ${item.type === 'food' ? 'bg-orange-50 text-orange-600' : 'bg-indigo-50 text-indigo-600'}`}>
-                              {item.icon}
+                            <div className={`p-2.5 rounded-lg shrink-0 ${item.category === "food" ? "bg-orange-50 text-orange-600" : "bg-indigo-50 text-indigo-600"}`}>
+                              {getCategoryIcon(item.category, item.is_indoor)}
                             </div>
-                            <div className="flex-1 mt-1">
+                            <div className="flex-1 min-w-0">
                               <p className="font-medium text-slate-700">{item.title}</p>
-                              <p className="text-xs text-slate-500 mt-1">
-                                {item.themeId === 'theme1' ? 'Plan A' : 'Plan B'}에서 선택
-                              </p>
+                              <p className="text-xs text-slate-500 mt-0.5">Plan {item.planType}에서 선택 · {item.place_name}</p>
                             </div>
-                            <button
-                              onClick={() => toggleCustomItem(item, item.themeId, item.day)}
+                            <button onClick={() => toggleCustomItem(item, item.planType, item.day)}
                               className="shrink-0 p-2 rounded-lg bg-slate-200 text-slate-600 hover:bg-red-100 hover:text-red-600 transition-colors"
-                              title="제거"
                             >
                               <X className="w-4 h-4" />
                             </button>
@@ -388,14 +435,15 @@ export function Results() {
                 );
               })}
             </div>
-
             <div className="mt-8 pt-6 border-t border-slate-200">
-              <button
-                onClick={() => alert("일정을 저장하려면 로그인이 필요합니다.")}
-                className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold text-lg hover:bg-indigo-700 transition-all shadow-md flex items-center justify-center gap-2"
+              {saveMsg && (
+                <p className={`text-sm text-center font-medium mb-3 ${saveMsg.includes("완료") ? "text-green-600" : "text-red-500"}`}>{saveMsg}</p>
+              )}
+              <button onClick={handleSaveCustom} disabled={saving}
+                className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold text-lg hover:bg-indigo-700 transition-all shadow-md flex items-center justify-center gap-2 disabled:opacity-60"
               >
                 <Sparkles className="w-5 h-5" />
-                나만의 맞춤 경로 저장하기
+                {saving ? "저장 중..." : "나만의 맞춤 경로 저장하기"}
               </button>
             </div>
           </div>
