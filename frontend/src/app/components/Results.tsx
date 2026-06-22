@@ -3,7 +3,7 @@ import { useSearchParams, Link, useNavigate } from "react-router";
 import {
   Loader2, MapPin, Calendar as CalendarIcon, Coffee, Camera,
   Compass, Utensils, Moon, CheckCircle2, Plus, X, Sparkles,
-  Sun, CloudRain, Cloud, AlertCircle, Bookmark, IndianRupee,
+  Sun, CloudRain, Cloud, AlertCircle, Bookmark, Coins,
   Clock, Home
 } from "lucide-react";
 import TravelMap from "./TravelMap";
@@ -338,7 +338,7 @@ export function Results() {
                                   <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{item.duration_minutes}분</span>
                                 )}
                                 {item.estimated_cost != null && item.estimated_cost > 0 && (
-                                  <span className="flex items-center gap-1"><IndianRupee className="w-3 h-3" />{item.estimated_cost.toLocaleString()}원</span>
+                                  <span className="flex items-center gap-1"><Coins className="w-3 h-3" />{item.estimated_cost.toLocaleString()}원</span>
                                 )}
                                 <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${item.is_indoor ? "bg-blue-100 text-blue-700" : "bg-green-100 text-green-700"}`}>
                                   {item.is_indoor ? "실내" : "실외"}
