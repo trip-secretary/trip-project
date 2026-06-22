@@ -289,7 +289,7 @@ export function Results() {
           </div>
 
           <div className="p-6 md:p-8 bg-slate-50">
-            <div className="mb-8 rounded-2xl overflow-hidden border border-slate-200 bg-slate-200 shadow-inner h-64">
+            <div className="mb-8 rounded-2xl border border-slate-200">
               <TravelMap
                 spots={activePlan.days[0]?.items
                   .filter((i) => i.lat && i.lng)
@@ -394,7 +394,7 @@ export function Results() {
           </div>
 
           <div className="bg-white rounded-2xl p-6 shadow-sm">
-            <div className="mb-6 rounded-xl overflow-hidden border border-slate-200 bg-slate-200 shadow-inner h-64">
+            <div className="mb-6 rounded-xl border border-slate-200">
               <TravelMap
                 spots={sortedCustom.filter((i) => i.lat && i.lng)
                   .map((item, idx) => ({ id: idx, name: item.place_name || item.title, lat: item.lat, lng: item.lng }))}

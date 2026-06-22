@@ -40,7 +40,6 @@ export default function TravelMap({ spots = defaultSpots }: TravelMapProps) {
       polylineRef.current.setMap(null);
       polylineRef.current = null;
     }
-
     if (!spots || spots.length === 0) return;
 
     const bounds = new kakao.maps.LatLngBounds();
@@ -52,55 +51,62 @@ export default function TravelMap({ spots = defaultSpots }: TravelMapProps) {
       const infoWindow = new kakao.maps.InfoWindow({
         content: `<div style="padding:6px 10px;font-size:13px;font-weight:600;white-space:nowrap">${spot.name}</div>`,
       });
-      kakao.maps.event.addListener(marker, 'click', () => {
-        infoWindow.open(map, marker);
-      });
+      kakao.maps.event.addListener(marker, 'click', () => infoWindow.open(map, marker));
       markersRef.current.push(marker);
 
       const overlay = new kakao.maps.CustomOverlay({
         position,
         content: `<div style="width:26px;height:26px;background:#185FA5;border-radius:50%;color:white;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid white;pointer-events:none">${index + 1}</div>`,
-        yAnchor: 0.5,
-        xAnchor: 0.5,
-        zIndex: 3,
+        yAnchor: 0.5, xAnchor: 0.5, zIndex: 3,
       });
       overlay.setMap(map);
       overlaysRef.current.push(overlay);
-
       return position;
     });
 
     polylineRef.current = new kakao.maps.Polyline({
-      path: linePath,
-      strokeWeight: 4,
-      strokeColor: '#185FA5',
-      strokeOpacity: 0.8,
-      strokeStyle: 'dash',
+      path: linePath, strokeWeight: 4, strokeColor: '#185FA5',
+      strokeOpacity: 0.8, strokeStyle: 'dash',
     });
     polylineRef.current.setMap(map);
     map.setBounds(bounds);
   };
 
   useEffect(() => {
-    const { kakao } = window;
-    if (!kakao || !mapContainer.current) return;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout>;
 
-    kakao.maps.load(() => {
-      if (mapRef.current) {
-        renderMarkers(kakao, mapRef.current, spots);
+    const tryInit = () => {
+      if (cancelled) return;
+      const kakao = window.kakao;
+      if (!kakao) {
+        retryTimer = setTimeout(tryInit, 200);
         return;
       }
-      const center = new kakao.maps.LatLng(37.5665, 126.9780);
-      const map = new kakao.maps.Map(mapContainer.current, { center, level: 8 });
-      mapRef.current = map;
-      renderMarkers(kakao, map, spots);
-    });
+      kakao.maps.load(() => {
+        if (cancelled || !mapContainer.current) return;
+        if (mapRef.current) {
+          renderMarkers(kakao, mapRef.current, spots);
+          return;
+        }
+        const center = new kakao.maps.LatLng(37.5665, 126.9780);
+        const map = new kakao.maps.Map(mapContainer.current, { center, level: 8 });
+        mapRef.current = map;
+        renderMarkers(kakao, map, spots);
+      });
+    };
+
+    tryInit();
+    return () => {
+      cancelled = true;
+      clearTimeout(retryTimer);
+    };
   }, [spots]);
 
   return (
     <div
       ref={mapContainer}
-      style={{ width: '100%', height: '100%', minHeight: '300px' }}
+      style={{ width: '100%', height: '256px' }}
       className="z-0"
     />
   );
