@@ -31,14 +31,30 @@ async def extract_receipt(image_base64: str) -> OCRResponse:
         "data": base64.b64decode(image_base64),
     }
 
-    model = genai.GenerativeModel("gemini-2.0-flash")
-    response = model.generate_content(
-        [OCR_PROMPT, image_data],
-        generation_config=genai.GenerationConfig(
-            temperature=0.1,
-            response_mime_type="application/json",
-        ),
-    )
+    MODEL_FALLBACKS = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-2.0-flash",
+    ]
+
+    response = None
+    for model_name in MODEL_FALLBACKS:
+        try:
+            logger.info(f"OCR 모델 시도: {model_name}")
+            m = genai.GenerativeModel(model_name)
+            response = m.generate_content(
+                [OCR_PROMPT, image_data],
+                generation_config=genai.GenerationConfig(
+                    temperature=0.1,
+                    response_mime_type="application/json",
+                ),
+            )
+            break
+        except Exception as e:
+            if "429" in str(e) or "quota" in str(e).lower() or "RESOURCE_EXHAUSTED" in str(e):
+                logger.warning(f"{model_name} 할당량 초과 — 다음 모델 시도")
+                continue
+            raise
 
     raw = response.text.strip()
     match = re.search(r"\{.*\}", raw, re.DOTALL)
