@@ -1,10 +1,12 @@
 import base64
 import json
+import logging
 import re
 import google.generativeai as genai
 from app.core.config import settings
 from app.schemas.dutch_pay import OCRResponse
 
+logger = logging.getLogger(__name__)
 genai.configure(api_key=settings.GEMINI_API_KEY)
 
 OCR_PROMPT = """
@@ -22,7 +24,8 @@ OCR_PROMPT = """
 
 
 async def extract_receipt(image_base64: str) -> OCRResponse:
-    model = genai.GenerativeModel("gemini-2.0-flash-lite")
+    logger.info("OCR 시작, 이미지 크기: %d bytes", len(image_base64))
+    model = genai.GenerativeModel("gemini-1.5-flash")
 
     image_data = {
         "mime_type": "image/jpeg",

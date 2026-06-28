@@ -1,5 +1,8 @@
 import json
+import logging
 from fastapi import APIRouter, Depends, HTTPException
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
@@ -180,4 +183,5 @@ async def ocr_receipt(req: OCRRequest):
         result = await extract_receipt(req.image_base64)
         return result
     except Exception as e:
+        logger.exception("OCR 처리 실패")
         raise HTTPException(status_code=500, detail=f"OCR 처리 실패: {str(e)}")
