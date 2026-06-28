@@ -12,10 +12,20 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS — 프론트(localhost:5173) 허용
+# CORS — 로컬 개발 + Vercel 배포 URL 허용
+import os
+
+_raw = os.getenv("ALLOWED_ORIGINS", "")
+_extra = [o.strip() for o in _raw.split(",") if o.strip()]
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:3000",
+] + _extra
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
