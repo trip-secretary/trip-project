@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 declare global {
   interface Window {
@@ -30,6 +30,7 @@ export default function TravelMap({ spots = defaultSpots }: TravelMapProps) {
   const markersRef = useRef<any[]>([]);
   const overlaysRef = useRef<any[]>([]);
   const polylineRef = useRef<any>(null);
+  const [mapFailed, setMapFailed] = useState(false);
 
   const renderMarkers = (kakao: any, map: any, spots: Spot[]) => {
     markersRef.current.forEach((m) => m.setMap(null));
@@ -74,12 +75,19 @@ export default function TravelMap({ spots = defaultSpots }: TravelMapProps) {
 
   useEffect(() => {
     let cancelled = false;
+    let retryCount = 0;
+    const MAX_RETRIES = 15;
     let retryTimer: ReturnType<typeof setTimeout>;
 
     const tryInit = () => {
       if (cancelled) return;
       const kakao = window.kakao;
       if (!kakao) {
+        if (retryCount >= MAX_RETRIES) {
+          setMapFailed(true);
+          return;
+        }
+        retryCount++;
         retryTimer = setTimeout(tryInit, 200);
         return;
       }
@@ -102,6 +110,30 @@ export default function TravelMap({ spots = defaultSpots }: TravelMapProps) {
       clearTimeout(retryTimer);
     };
   }, [spots]);
+
+  if (mapFailed) {
+    return (
+      <div
+        style={{ width: '100%', height: '256px' }}
+        className="z-0 flex flex-col items-center justify-center bg-gray-50 border border-gray-200 rounded-lg gap-2"
+      >
+        <p className="text-sm font-semibold text-gray-600">경로 순서</p>
+        <div className="flex flex-col gap-1">
+          {spots.map((spot, index) => (
+            <div key={spot.id} className="flex items-center gap-2 text-sm text-gray-700">
+              <span
+                style={{ background: '#185FA5' }}
+                className="w-6 h-6 rounded-full text-white flex items-center justify-center text-xs font-bold shrink-0"
+              >
+                {index + 1}
+              </span>
+              <span>{spot.name}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
