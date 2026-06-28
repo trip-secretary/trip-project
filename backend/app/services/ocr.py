@@ -32,7 +32,7 @@ async def extract_receipt(image_base64: str) -> OCRResponse:
     image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
 
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-1.5-flash",
         contents=[OCR_PROMPT, image_part],
         config=types.GenerateContentConfig(
             temperature=0.1,
