@@ -26,7 +26,7 @@ async def extract_receipt(image_base64: str) -> OCRResponse:
 
     image_data = {
         "mime_type": "image/jpeg",
-        "data": image_base64,
+        "data": base64.b64decode(image_base64),
     }
 
     response = model.generate_content(
