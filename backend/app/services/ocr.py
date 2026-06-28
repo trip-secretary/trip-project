@@ -2,12 +2,12 @@ import base64
 import json
 import logging
 import re
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 from app.core.config import settings
 from app.schemas.dutch_pay import OCRResponse
 
 logger = logging.getLogger(__name__)
+genai.configure(api_key=settings.GEMINI_API_KEY)
 
 OCR_PROMPT = """
 이 영수증 이미지를 분석해서 아래 JSON 형식으로만 답해주세요. 다른 텍스트는 출력하지 마세요.
@@ -26,15 +26,15 @@ OCR_PROMPT = """
 async def extract_receipt(image_base64: str) -> OCRResponse:
     logger.info("OCR 시작, 이미지 크기: %d bytes", len(image_base64))
 
-    client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    image_data = {
+        "mime_type": "image/jpeg",
+        "data": base64.b64decode(image_base64),
+    }
 
-    image_bytes = base64.b64decode(image_base64)
-    image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
-
-    response = client.models.generate_content(
-        model="gemini-1.5-flash",
-        contents=[OCR_PROMPT, image_part],
-        config=types.GenerateContentConfig(
+    model = genai.GenerativeModel("gemini-2.0-flash")
+    response = model.generate_content(
+        [OCR_PROMPT, image_data],
+        generation_config=genai.GenerationConfig(
             temperature=0.1,
             response_mime_type="application/json",
         ),
